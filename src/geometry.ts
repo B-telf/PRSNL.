@@ -30,7 +30,6 @@ export const SHAPE = {
     /** Corners droop slightly, like a hood. */
     droop: 0.022,
     inset: 0.075,
-    lip: 0.014,
   },
 } as const;
 
@@ -57,7 +56,15 @@ function visorField(theta: number, y: number): number {
 }
 
 /** Width of the bevelled rim around the opening, in field units. */
-const RIM = 0.14;
+const RIM = 0.24;
+/** Flat shelf just outside the opening, so its cut edge lies on a smooth surface. */
+const SHELF = 0.035;
+
+/** 0 at the opening's edge … 1 where the rim has fully blended into the shell. */
+function rimBlend(f: number): number {
+  const t = Math.min(1, Math.max(0, (f - 1 - SHELF) / RIM));
+  return t * t * t * (t * (t * 6 - 15) + 10);
+}
 /** How far the display sits behind the opening's edge. */
 const GLASS_DEPTH = 0.012;
 
@@ -75,6 +82,8 @@ export function createBodyGeometry(detail = 1): THREE.BufferGeometry {
   const v = SHAPE.visor;
   const positions = new Float32Array((NU + 1) * (NV + 1) * 3);
   const uvs = new Float32Array((NU + 1) * (NV + 1) * 2);
+  // 0 inside the face rim, 1 on the open shell: lets the material keep the rim matte.
+  const masks = new Float32Array((NU + 1) * (NV + 1));
   const p = new THREE.Vector3();
 
   for (let i = 0; i <= NV; i++) {
@@ -92,10 +101,10 @@ export function createBodyGeometry(detail = 1): THREE.BufferGeometry {
       const theta = (j / NU) * Math.PI * 2 - Math.PI;
       const f = visorField(theta, y);
       // Rim: steep at the opening's edge, easing out into the shell.
-      const rim = Math.min(1, Math.max(0, (f - 1) / RIM));
-      const recess = (1 - rim) * (1 - rim);
-      const lip = Math.exp(-Math.pow((f - 1 - RIM) / 0.09, 2));
-      const r = baseR === 0 ? 0 : baseR - v.inset * recess + v.lip * lip;
+      // The shell eases down into the opening with no crease at either end.
+      const blend = rimBlend(f);
+      const r = baseR === 0 ? 0 : baseR - v.inset * (1 - blend);
+      masks[i * (NU + 1) + j] = blend;
       surfacePoint(theta, y, r, p);
       const k = i * (NU + 1) + j;
       positions.set([p.x, p.y, p.z], k * 3);
@@ -118,6 +127,7 @@ export function createBodyGeometry(detail = 1): THREE.BufferGeometry {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setAttribute('loopMask', new THREE.BufferAttribute(masks, 1));
   geo.setIndex(indices);
   geo.computeVertexNormals();
 
@@ -163,8 +173,7 @@ export function createVisorMask(size = 1024): THREE.DataTexture {
       const f = visorField(theta, y);
       const k = (j * size + i) * 4;
       // Soft occlusion inside the rim, where the shell dips towards the display.
-      const rim = Math.min(1, Math.max(0, (f - 1) / RIM));
-      const shade = Math.round(255 * height * (0.62 + 0.38 * rim * (2 - rim)));
+      const shade = Math.round(255 * height * (0.6 + 0.4 * rimBlend(f)));
       data[k] = data[k + 1] = data[k + 2] = shade;
       data[k + 3] = Math.round(Math.min(1, Math.max(0, 0.5 + (f - 1) * 6)) * 255);
     }

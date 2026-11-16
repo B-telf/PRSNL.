@@ -9,7 +9,7 @@ import type { EyeStyle } from './Face';
  *   <prsnl-loop overlay size="180" anchor="bottom-right"></prsnl-loop>
  *
  * Read `.loop` for the character API and `.stage` for placement. Fires
- * `loop-ready`, `loop-tap`, `loop-grab`, `loop-release`, `loop-arrive`.
+ * `loop-ready`, `loop-tap`, `loop-grab`, `loop-release`, `loop-arrive`, `loop-celebrate`.
  */
 export class PrsnlLoopElement extends HTMLElement {
   static observedAttributes = ['skin', 'eyes', 'eye-style', 'motion', 'state', 'glow', 'anchor'];
@@ -17,6 +17,11 @@ export class PrsnlLoopElement extends HTMLElement {
 
   get loop() {
     return this.stage?.loop ?? null;
+  }
+
+  /** Loop dances while confetti fills the screen. */
+  celebrate(): Promise<void> {
+    return this.stage ? this.stage.celebrate() : Promise.resolve();
   }
 
   connectedCallback(): void {
@@ -50,7 +55,7 @@ export class PrsnlLoopElement extends HTMLElement {
     const loop = this.stage.loop;
     const state = this.getAttribute('state');
     if (state) loop.setState(state as LoopState);
-    for (const type of ['tap', 'grab', 'release', 'arrive'] as const) {
+    for (const type of ['tap', 'grab', 'release', 'arrive', 'celebrate'] as const) {
       loop.on(type, (detail) => this.dispatchEvent(new CustomEvent(`loop-${type}`, { detail, bubbles: true })));
     }
     this.dispatchEvent(new CustomEvent('loop-ready', { detail: { loop, stage: this.stage }, bubbles: true }));

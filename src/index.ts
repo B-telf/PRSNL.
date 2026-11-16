@@ -10,3 +10,5 @@ export { SKINS, EYE_COLORS } from './skins';
 export type { Skin, SkinName, EyeColorName } from './skins';
 export { PrsnlLoopElement, defineLoopElement } from './element';
 export { exportGLB } from './exportGLB';
+export { Confetti, CONFETTI_COLORS } from './confetti';
+export type { BurstOptions } from './confetti';

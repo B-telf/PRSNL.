@@ -1,5 +1,5 @@
 import type { ExpressionName } from './Face';
-import { easeInOut, envelope } from './spring';
+import { clamp, easeInOut, envelope, lerp } from './spring';
 
 /** Additive offsets a gesture layers on top of Loop's live motion. */
 export interface Pose {
@@ -88,6 +88,26 @@ export const GESTURES = {
       pose.stretch = e * (hop - 0.45) * 0.14;
       pose.armL = pose.armR = e * (1.9 + hop * 0.5);
       pose.roll = e * Math.sin(p * TAU * 2) * 0.08;
+    },
+  },
+  /** Party dance: side-to-side bounce, a spin in the middle, arms-up finish. */
+  dance: {
+    duration: 3.6,
+    expression: 'joy',
+    apply(p, pose) {
+      const e = envelope(p, 0.06, 0.1);
+      const sway = Math.sin(p * TAU * 3.5);
+      const beat = Math.abs(Math.sin(p * TAU * 3.5));
+      const finish = clamp((p - 0.84) / 0.08, 0, 1);
+      pose.slide = e * sway * 0.24 * (1 - finish);
+      pose.roll = -e * sway * 0.17 * (1 - finish);
+      pose.lift = e * (beat * 0.2 + finish * 0.22);
+      pose.stretch = e * ((beat - 0.5) * 0.2 + finish * 0.08);
+      pose.pitch = -e * finish * 0.1;
+      pose.armL = e * lerp(1.5 + sway * 0.9, 2.5, finish);
+      pose.armR = e * lerp(1.5 - sway * 0.9, 2.5, finish);
+      // One full turn through the middle of the dance.
+      pose.yaw = easeInOut(clamp((p - 0.4) / 0.26, 0, 1)) * TAU;
     },
   },
   /** Hover & Settle — lifts, turns once, lands. */

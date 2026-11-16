@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Loop, type LoopOptions } from './Loop';
+import { Confetti } from './confetti';
 import { clamp } from './spring';
 
 export type Anchor = 'center' | 'bottom-center' | 'bottom-left' | 'bottom-right';
@@ -28,6 +29,8 @@ export interface LoopStageOptions extends LoopOptions {
   roam?: boolean;
   /** Ground shadow. */
   shadow?: boolean;
+  /** Amount of confetti when celebrating: 0 = none, 1 = default. */
+  particles?: number;
   /** Cap on device pixel ratio. */
   maxPixelRatio?: number;
   /** Start the render loop immediately. */
@@ -48,6 +51,7 @@ export class LoopStage {
   readonly camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 200);
   readonly renderer: THREE.WebGLRenderer;
   readonly canvas: HTMLCanvasElement;
+  readonly confetti = new Confetti();
 
   private readonly opts: Required<Omit<LoopStageOptions, keyof LoopOptions | 'size'>> & { size?: number };
   private readonly container: HTMLElement;
@@ -83,6 +87,7 @@ export class LoopStage {
       returnHome: options.returnHome ?? !overlay,
       roam: options.roam ?? false,
       shadow: options.shadow ?? true,
+      particles: options.particles ?? 1,
       maxPixelRatio: options.maxPixelRatio ?? 2,
       autoStart: options.autoStart ?? true,
     };
@@ -134,6 +139,7 @@ export class LoopStage {
       if (o.name === 'Shadow') o.visible = this.opts.shadow;
     });
     this.scene.add(this.loop);
+    this.loop.on('celebrate', () => this.fireConfetti());
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
@@ -192,6 +198,50 @@ export class LoopStage {
     else this.floatTo(side === 'right' ? r.right + gap + half : r.left - gap - half, r.top + r.height / 2);
   }
 
+  /** Loop dances while confetti fills the whole screen. Resolves when the dance ends. */
+  celebrate(): Promise<void> {
+    return this.loop.celebrate();
+  }
+
+  /** Confetti amount for celebrations: 0 = none, 1 = default. */
+  setParticles(amount: number): void {
+    this.opts.particles = clamp(amount, 0, 2);
+  }
+
+  /** Loop's bounding box on screen, in viewport (client) pixels. */
+  getScreenRect(): { x: number; y: number; width: number; height: number } {
+    const r = this.canvas.getBoundingClientRect();
+    const c = this.loop.getCenter(this.v).project(this.camera);
+    const height = this.pixelSize();
+    const width = height * 0.8;
+    return {
+      x: r.left + (c.x * 0.5 + 0.5) * r.width - width / 2,
+      y: r.top + (-c.y * 0.5 + 0.5) * r.height - height / 2,
+      width,
+      height,
+    };
+  }
+
+  private fireConfetti(): void {
+    // Calmer for people who asked for less motion; `particles` scales it further.
+    const amount = this.opts.particles * (this.loop.motion === 'still' ? 0.3 : 1);
+    if (amount <= 0) return;
+    const n = (count: number) => Math.round(count * amount);
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    // Launch speed that carries a piece roughly the height of the screen.
+    const reach = Math.max(1100, Math.min(2600, h * 2.3));
+    const r = this.getScreenRect();
+    const confetti = this.confetti;
+    // A pop from Loop, cannons from both bottom corners, then a long drift from above.
+    confetti.burst({ x: r.x + r.width / 2, y: r.y + r.height * 0.3, count: n(90), spread: 150, speed: reach * 0.55 });
+    window.setTimeout(() => {
+      confetti.burst({ x: -10, y: h + 10, count: n(150), angle: 66, spread: 50, speed: reach });
+      confetti.burst({ x: w + 10, y: h + 10, count: n(150), angle: 114, spread: 50, speed: reach });
+    }, 160);
+    window.setTimeout(() => confetti.rain(n(260), 2.6), 350);
+  }
+
   /** Return to the resting anchor. */
   goHome(): void {
     this.pinned = false;
@@ -213,6 +263,7 @@ export class LoopStage {
 
   dispose(): void {
     this.stop();
+    this.confetti.clear();
     this.resizeObserver.disconnect();
     this.disposers.forEach((d) => d());
     this.loop.dispose();
@@ -278,14 +329,11 @@ export class LoopStage {
 
   private placeHitPad(): void {
     const pad = this.hitPad!;
-    const c = this.loop.getCenter(this.v).project(this.camera);
-    const size = this.pixelSize();
-    const w = size * 0.8;
-    const x = (c.x * 0.5 + 0.5) * this.width - w / 2;
-    const y = (-c.y * 0.5 + 0.5) * this.height - size / 2;
-    pad.style.width = `${w}px`;
-    pad.style.height = `${size}px`;
-    pad.style.transform = `translate(${x.toFixed(1)}px,${y.toFixed(1)}px)`;
+    const box = this.getScreenRect();
+    const r = this.canvas.getBoundingClientRect();
+    pad.style.width = `${box.width}px`;
+    pad.style.height = `${box.height}px`;
+    pad.style.transform = `translate(${(box.x - r.left).toFixed(1)}px,${(box.y - r.top).toFixed(1)}px)`;
   }
 
   // ───────────────────────────── Pointer ─────────────────────────────

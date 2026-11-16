@@ -33,6 +33,8 @@ buttons('eyes', Object.keys(EYE_COLORS), (c) => loop.setEyeColor(c), 'warm-white
 buttons('eyeStyle', ['oval', 'pixel', 'outline'], (s) => loop.setEyeStyle(s as EyeStyle), 'oval');
 buttons('motion', ['still', 'subtle', 'expressive'], (m) => loop.setMotion(m as MotionLevel), loop.motion);
 
+document.getElementById('celebrate')!.addEventListener('click', () => void stage.celebrate());
+
 document.querySelector<HTMLInputElement>('#glow')!.addEventListener('input', (e) => {
   loop.setGlow(Number((e.target as HTMLInputElement).value));
 });

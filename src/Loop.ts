@@ -34,6 +34,7 @@ export interface LoopEvents {
   grab: undefined;
   release: undefined;
   arrive: undefined;
+  celebrate: undefined;
   gestureend: { name: string };
   statechange: { state: LoopState; previous: LoopState };
 }
@@ -168,9 +169,11 @@ export class Loop extends THREE.Group {
       shader.uniforms.uLoopJelly = this.jellyU;
       shader.vertexShader =
         'uniform vec2 uLoopBend;\nuniform vec3 uLoopWave;\nuniform vec3 uLoopJelly;\n' +
+        (rim ? 'attribute float loopMask;\nvarying float vLoopMask;\n' : '') +
         shader.vertexShader.replace(
           '#include <begin_vertex>',
           `#include <begin_vertex>
+          ${rim ? 'vLoopMask = loopMask;' : ''}
           float loopK = clamp((uLoopWave.z - transformed.y) / uLoopWave.z, 0.0, 1.0);
           float loopW = loopK * loopK;
           float loopB = sin(clamp(transformed.y / ${BODY_HEIGHT.toFixed(3)}, 0.0, 1.0) * 3.14159265);
@@ -179,11 +182,11 @@ export class Loop extends THREE.Group {
           transformed.x += sin(transformed.y * 5.0 + uLoopWave.y) * uLoopWave.x * loopW;
           transformed.z += cos(transformed.y * 4.0 + uLoopWave.y * 0.8) * uLoopWave.x * loopW;`,
         );
-      if (rim) addRim(shader, this.rimU);
+      if (rim) addRim(shader, this.rimU, true);
     };
     this.bodyMat.onBeforeCompile = deform(true);
     this.screenMat.onBeforeCompile = deform(false);
-    this.limbMat.onBeforeCompile = (shader) => addRim(shader, this.rimU);
+    this.limbMat.onBeforeCompile = (shader) => addRim(shader, this.rimU, false);
 
     const body = new THREE.Mesh(createBodyGeometry(detail), this.bodyMat);
     body.name = 'Body';
@@ -337,6 +340,17 @@ export class Loop extends THREE.Group {
     return new Promise((resolve) => {
       this.gesture = { name, def, t: 0, resolve };
     });
+  }
+
+  /**
+   * Celebrate: Loop dances. On a `LoopStage` this also fills the screen with
+   * confetti. Resolves when the dance ends.
+   */
+  celebrate(): Promise<void> {
+    if (this._state === 'sleeping') this.setState('idle');
+    this.jelly.kick(2.4);
+    this.emit('celebrate', undefined);
+    return this.play('dance');
   }
 
   /**
@@ -716,17 +730,35 @@ export class Loop extends THREE.Group {
   }
 }
 
-/** Adds a soft glow at grazing angles so the shell reads as slightly translucent. */
-function addRim(shader: THREE.WebGLProgramParametersWithUniforms, color: { value: THREE.Color }): void {
+/**
+ * Adds a soft glow at grazing angles so the shell reads as slightly
+ * translucent. With `masked`, the face rim is kept matte and glow-free (using
+ * the geometry's `loopMask`), so no highlights collect around the display.
+ */
+function addRim(
+  shader: THREE.WebGLProgramParametersWithUniforms, color: { value: THREE.Color }, masked: boolean,
+): void {
   shader.uniforms.uLoopRim = color;
-  shader.fragmentShader =
-    'uniform vec3 uLoopRim;\n' +
-    shader.fragmentShader.replace(
-      '#include <emissivemap_fragment>',
-      `#include <emissivemap_fragment>
-      float loopRim = 1.0 - clamp(abs(dot(normalize(normal), normalize(vViewPosition))), 0.0, 1.0);
-      totalEmissiveRadiance += uLoopRim * loopRim * loopRim * loopRim;`,
+  let frag = shader.fragmentShader.replace(
+    '#include <emissivemap_fragment>',
+    `#include <emissivemap_fragment>
+    float loopRim = 1.0 - clamp(abs(dot(normalize(normal), normalize(vViewPosition))), 0.0, 1.0);
+    totalEmissiveRadiance += uLoopRim * loopRim * loopRim * loopRim${masked ? ' * vLoopMask' : ''};`,
+  );
+  if (masked) {
+    frag = frag.replace(
+      '#include <lights_physical_fragment>',
+      `#include <lights_physical_fragment>
+      material.roughness = mix(0.9, material.roughness, vLoopMask);
+      #ifdef USE_CLEARCOAT
+        material.clearcoat *= vLoopMask;
+      #endif
+      #ifdef USE_SHEEN
+        material.sheenColor *= vLoopMask;
+      #endif`,
     );
+  }
+  shader.fragmentShader = 'uniform vec3 uLoopRim;\n' + (masked ? 'varying float vLoopMask;\n' : '') + frag;
 }
 
 function createShadow(): THREE.Mesh {

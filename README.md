@@ -12,7 +12,8 @@ customization catalog, built as an interactive 3D module you can drop into an ap
 - **Interactive** – eyes and head follow the pointer, tapping squishes it, it can be
   picked up and carried, and it can float to any point or DOM element.
 - **App states** – `idle`, `listening`, `thinking`, `speaking`, `sleeping`, plus
-  17 expressions and 10 gestures.
+  17 expressions and 11 gestures.
+- **Celebrate** – one call makes Loop dance while confetti fills the whole screen.
 - **Static model file** – `assets/loop.glb` for other engines and tools.
 
 Built on [three.js](https://threejs.org) (peer dependency, r162 or newer). Runs in
@@ -105,8 +106,14 @@ function LoopView({ state }: { state: LoopState }) {
 }
 ```
 
-In React Native, Flutter or a native shell, host the page in a WebView, or load
-`assets/loop.glb` into the platform's own 3D view (see below).
+### iOS
+
+See **[ios/README.md](ios/README.md)** for step-by-step instructions. In short:
+add `ios/LoopKit/LoopKit.swift` and `ios/LoopKit/loop.html` to your Xcode target,
+then `ContentView().loopOverlay(loop)`.
+
+React Native, Flutter and Android can load the same `loop.html` in their own
+web view and drive it through `LoopBridge.call(method, args)`.
 
 ## API
 
@@ -115,7 +122,8 @@ In React Native, Flutter or a native shell, host the page in a WebView, or load
 | | |
 |---|---|
 | `setState(state)` | `idle` · `listening` · `thinking` · `speaking` · `sleeping` |
-| `play(gesture)` | `wave` · `nod` · `shake` · `stretch` · `celebrate` · `spin` · `shuffle` · `wiggle` · `tilt` · `startle` |
+| `celebrate()` | Dance; on a `LoopStage` the whole screen also fills with confetti |
+| `play(gesture)` | `wave` · `nod` · `shake` · `stretch` · `celebrate` · `dance` · `spin` · `shuffle` · `wiggle` · `tilt` · `startle` |
 | `setExpression(name)` / `express(name, seconds)` | `neutral` · `happy` · `joy` · `laugh` · `knowing` · `curious` · `attentive` · `thinking` · `surprised` · `sleepy` · `asleep` · `unimpressed` · `sideEye` · `concerned` · `sad` · `determined` · `wink` |
 | `speak(level?)` | Mouth movement; pass loudness per frame or omit for automatic |
 | `moveTo(x, y, z)` / `teleport(x, y, z)` | Glide to, or jump to, a point |
@@ -127,7 +135,7 @@ In React Native, Flutter or a native shell, host the page in a WebView, or load
 | `setMotion(level)` | `still` · `subtle` · `expressive` (defaults to `still` when the device asks for reduced motion) |
 | `setGlow(0…2)` | Display brightness |
 | `defineExpression(name, params)` / `defineGesture(name, gesture)` | Add your own |
-| `on(event, fn)` | `tap` · `grab` · `release` · `arrive` · `gestureend` · `statechange` |
+| `on(event, fn)` | `tap` · `grab` · `release` · `arrive` · `celebrate` · `gestureend` · `statechange` |
 
 ### `LoopStage`
 
@@ -143,8 +151,9 @@ Creates the renderer, camera, lighting and pointer handling.
 | `returnHome` | `true` (contained) | Float back to the anchor after a drag |
 | `roam` | `false` | Tap empty space to send Loop there |
 | `shadow` | `true` | Ground shadow |
+| `particles` | `1` | Confetti amount when celebrating (0 = none) |
 
-Methods: `floatTo(clientX, clientY)`, `floatToElement(el, side)`, `goHome()`,
+Methods: `celebrate()`, `floatTo(clientX, clientY)`, `floatToElement(el, side)`, `goHome()`,
 `setAnchor(anchor)`, `start()`, `stop()`, `dispose()`.
 
 ## The model file
@@ -166,7 +175,10 @@ they are not in the file. To re-export after changing the look, use
 | `src/gestures.ts` | Gesture definitions. |
 | `src/skins.ts` | Shell finishes and eye colours. |
 | `src/LoopStage.ts` | Renderer, lighting, layout and pointer interaction. |
+| `src/confetti.ts` | Full-screen confetti. |
 | `src/element.ts` | The `<prsnl-loop>` custom element. |
+| `embed/` | The page native apps load in a web view; built into `ios/LoopKit/loop.html`. |
+| `ios/LoopKit/` | Swift wrapper and the built page for iOS. |
 
 ## Catalog coverage
 
