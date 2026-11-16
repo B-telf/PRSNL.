@@ -41,22 +41,22 @@ const x = (o: Partial<FaceParams>): FaceParams => ({ ...NEUTRAL, ...o });
 /** Built-in expressions. Add your own with `Loop.defineExpression`. */
 export const EXPRESSIONS = {
   neutral: x({}),
-  happy: x({ arch: 1, smile: 1, mouthW: 1.25 }),
-  joy: x({ arch: 1, smile: 1, mouthOpen: 0.7, mouthW: 1.3 }),
-  laugh: x({ arch: 1, smile: 1, mouthOpen: 1, mouthW: 1.2, raiseL: 0.05, raiseR: 0.05 }),
-  knowing: x({ smile: 0.8, skew: 0.7, lid: 0.22, mouthW: 1.2 }),
-  curious: x({ scaleR: 1.18, raiseR: 0.12, scaleL: 0.92, smile: 0.25, mouthW: 0.7 }),
-  attentive: x({ eyeH: 1.08, eyeW: 1.05, smile: 0.4, mouthW: 0.8 }),
-  thinking: x({ lid: 0.18, smile: 0, mouthW: 0.6, dots: 1, raiseL: 0.06, raiseR: 0.06 }),
-  surprised: x({ eyeH: 1.2, eyeW: 1.25, smile: 0, mouthOpen: 0.75, mouthW: 0.5, raiseL: 0.08, raiseR: 0.08 }),
-  sleepy: x({ lid: 0.55, eyeH: 0.85, smile: 0.2, mouthW: 0.7 }),
+  happy: x({ arch: 1, smile: 1, mouthW: 1.25, raiseL: 0.03, raiseR: 0.03 }),
+  joy: x({ arch: 1, smile: 1, mouthOpen: 0.8, mouthW: 1.3, raiseL: 0.05, raiseR: 0.05 }),
+  laugh: x({ arch: 1, smile: 1, mouthOpen: 1, mouthW: 1.25, raiseL: 0.08, raiseR: 0.08, eyeW: 1.1 }),
+  knowing: x({ smile: 0.9, skew: 0.9, lid: 0.3, mouthW: 1.2 }),
+  curious: x({ scaleR: 1.3, raiseR: 0.14, scaleL: 0.85, smile: 0.2, mouthW: 0.6 }),
+  attentive: x({ eyeH: 1.14, eyeW: 1.1, smile: 0.45, mouthW: 0.8, raiseL: 0.03, raiseR: 0.03 }),
+  thinking: x({ lid: 0.22, smile: 0, mouthW: 0.6, dots: 1, raiseL: 0.07, raiseR: 0.07 }),
+  surprised: x({ eyeH: 1.22, eyeW: 1.35, smile: 0, mouthOpen: 0.85, mouthW: 0.5, raiseL: 0.07, raiseR: 0.07 }),
+  sleepy: x({ lid: 0.6, eyeH: 0.85, smile: 0.2, mouthW: 0.7 }),
   asleep: x({ arch: -1, smile: 0.1, mouthW: 0.5 }),
-  unimpressed: x({ lid: 0.5, smile: 0, mouthW: 0.7 }),
-  sideEye: x({ lid: 0.3, smile: 0.35, skew: -0.5 }),
-  concerned: x({ tilt: -0.28, smile: -0.45, mouthW: 0.8, eyeH: 0.95 }),
-  sad: x({ tilt: -0.34, smile: -0.8, lid: 0.2, eyeH: 0.9 }),
-  determined: x({ tilt: 0.24, lid: 0.2, smile: 0.3, mouthW: 0.9 }),
-  wink: x({ scaleL: 1, raiseR: 0, smile: 0.9, skew: 0.4 }),
+  unimpressed: x({ lid: 0.55, smile: -0.05, mouthW: 0.8 }),
+  sideEye: x({ lid: 0.35, smile: 0.4, skew: -0.7 }),
+  concerned: x({ tilt: -0.34, smile: -0.6, mouthW: 0.8, eyeH: 0.95, raiseL: 0.03, raiseR: 0.03 }),
+  sad: x({ tilt: -0.42, smile: -1, lid: 0.22, eyeH: 0.88, mouthW: 0.9 }),
+  determined: x({ tilt: 0.32, lid: 0.25, smile: 0.3, mouthW: 0.9 }),
+  wink: x({ smile: 1, skew: 0.5, mouthW: 1.15 }),
 } satisfies Record<string, FaceParams>;
 
 export type ExpressionName = keyof typeof EXPRESSIONS;
@@ -138,15 +138,15 @@ export class Face {
 
     const gx = this.lookX * W * 0.085;
     const gy = -this.lookY * H * 0.13;
-    const eyeY = H * 0.44 + gy;
-    const spread = W * 0.2;
+    const eyeY = H * 0.4 + gy;
+    const spread = W * 0.205;
 
     this.eye(W / 2 - spread + gx, eyeY, -1, p.scaleL, p.raiseL, this.blink, this.color);
     this.eye(
       W / 2 + spread + gx, eyeY, 1, p.scaleR, p.raiseR,
       Math.max(this.blink, this.winkRight), this.colorRight ?? this.color,
     );
-    this.mouth(W / 2 + gx * 1.15, H * 0.7 + gy * 0.85);
+    this.mouth(W / 2 + gx * 1.15, H * 0.76 + gy * 0.7);
     this.texture.needsUpdate = true;
   }
 
@@ -155,7 +155,7 @@ export class Face {
     c.fillStyle = color;
     c.strokeStyle = color;
     c.shadowColor = color;
-    c.shadowBlur = 26 * this.glow;
+    c.shadowBlur = 38 * this.glow;
     c.lineCap = this.style === 'pixel' ? 'butt' : 'round';
     c.lineJoin = 'round';
   }
@@ -163,8 +163,8 @@ export class Face {
   private eye(cx: number, cy: number, side: number, scale: number, raise: number, shut: number, color: string): void {
     const p = this.params;
     const c = this.ctx;
-    const w = 42 * p.eyeW * scale;
-    const h = 112 * p.eyeH * scale;
+    const w = 58 * p.eyeW * scale;
+    const h = 150 * p.eyeH * scale;
     const arch = clamp(p.arch, -1, 1);
     const a = Math.abs(arch);
     const open = clamp(p.open * (1 - shut), 0, 1);
@@ -205,7 +205,7 @@ export class Face {
       c.beginPath();
       c.roundRect(-ww / 2, -hh / 2, ww, hh, r);
       if (this.style === 'outline') {
-        c.lineWidth = 7;
+        c.lineWidth = 10;
         c.stroke();
       } else {
         c.fill();
@@ -218,8 +218,8 @@ export class Face {
     const p = this.params;
     const c = this.ctx;
     const alpha = 1 - clamp(p.dots, 0, 1);
-    const half = 34 * p.mouthW;
-    const curve = p.smile * 22;
+    const half = 50 * p.mouthW;
+    const curve = p.smile * 30;
     const open = clamp(p.mouthOpen + this.talk, 0, 1);
 
     c.save();
@@ -228,10 +228,10 @@ export class Face {
 
     if (alpha > 0.02) {
       c.globalAlpha = alpha;
-      const lift = p.skew * 9;
+      const lift = p.skew * 13;
       if (open > 0.06) {
         // Open mouth: flat (or curved) top, rounded drop below.
-        const drop = 10 + open * 38;
+        const drop = 14 + open * 48;
         const hw = half * lerp(1, 0.78, open);
         c.beginPath();
         c.moveTo(-hw, -curve * 0.5 + lift);
@@ -240,7 +240,7 @@ export class Face {
         c.closePath();
         c.fill();
       } else {
-        c.lineWidth = 9;
+        c.lineWidth = 13;
         c.beginPath();
         c.moveTo(-half, -curve * 0.5 + lift);
         c.quadraticCurveTo(p.skew * half * 0.5, curve * 1.5, half, -curve * 0.5 - lift);
@@ -254,7 +254,7 @@ export class Face {
         const phase = this.time * 5.2 - i * 0.9;
         const hop = Math.max(0, Math.sin(phase)) * 11;
         c.beginPath();
-        c.arc((i - 1) * 30, -hop, 7.5, 0, Math.PI * 2);
+        c.arc((i - 1) * 40, -hop * 1.3, 10, 0, Math.PI * 2);
         c.fill();
       }
     }

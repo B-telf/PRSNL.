@@ -73,6 +73,9 @@ export class Loop extends THREE.Group {
   private readonly hit: THREE.Mesh;
   private readonly bend = { value: new THREE.Vector2() };
   private readonly wave = { value: new THREE.Vector3(0, 0, BEND_TOP) };
+  /** x, y: sideways wobble of the belly; z: how far the belly bulges. */
+  private readonly jellyU = { value: new THREE.Vector3() };
+  private readonly rimU = { value: new THREE.Color() };
   private grainTex: THREE.Texture | null = null;
 
   // Motion state.
@@ -80,20 +83,23 @@ export class Loop extends THREE.Group {
   private level: MotionLevel = 'expressive';
   private time = 0;
   private readonly eased = new THREE.Vector3();
-  private readonly px = new Spring(0, 6, 0.62);
-  private readonly py = new Spring(0, 6, 0.62);
-  private readonly pz = new Spring(0, 6, 0.62);
-  private readonly roll = new Spring(0, 6.5, 0.45);
-  private readonly lean = new Spring(0, 6.5, 0.5);
-  private readonly bendX = new Spring(0, 7, 0.32);
-  private readonly bendZ = new Spring(0, 7, 0.32);
+  private readonly px = new Spring(0, 9, 0.5);
+  private readonly py = new Spring(0, 9, 0.5);
+  private readonly pz = new Spring(0, 9, 0.5);
+  private readonly roll = new Spring(0, 8, 0.3);
+  private readonly lean = new Spring(0, 8, 0.34);
+  private readonly bendX = new Spring(0, 9, 0.26);
+  private readonly bendZ = new Spring(0, 9, 0.26);
+  private readonly wobX = new Spring(0, 13, 0.14);
+  private readonly wobZ = new Spring(0, 13, 0.14);
+  private readonly prevV = new THREE.Vector3();
   private readonly yaw = new Spring(0, 8, 0.8);
   private readonly pitch = new Spring(0, 8, 0.8);
-  private readonly jelly = new Spring(0, 15, 0.22);
+  private readonly jelly = new Spring(0, 14, 0.15);
   private readonly approach = new Spring(0, 4, 0.9);
-  private readonly feetX = [new Spring(0, 9, 0.4), new Spring(0, 8, 0.36)];
-  private readonly feetY = [new Spring(0, 9, 0.45), new Spring(0, 8, 0.4)];
-  private readonly armSwing = [new Spring(0, 8, 0.4), new Spring(0, 7.4, 0.38)];
+  private readonly feetX = [new Spring(0, 14, 0.42), new Spring(0, 12.5, 0.38)];
+  private readonly feetY = [new Spring(0, 11, 0.3), new Spring(0, 9.5, 0.27)];
+  private readonly armSwing = [new Spring(0, 10, 0.26), new Spring(0, 9, 0.24)];
   private held = false;
   private travelling = false;
 
@@ -149,26 +155,35 @@ export class Loop extends THREE.Group {
       envMapIntensity: 0.15,
       emissive: 0xffffff,
       emissiveMap: this.face.texture,
-      emissiveIntensity: 1.25,
+      emissiveIntensity: 1.9,
     });
     this.screenMat.name = 'LoopDisplay';
 
-    // The lower body trails behind the head: bend it in the vertex shader.
-    this.bodyMat.onBeforeCompile = (shader) => {
+    // Soft-body deformation, done in the vertex shader: the base trails behind
+    // the head, the belly wobbles sideways and bulges when squashed. The
+    // display shares it so the face stays seated in the shell.
+    const deform = (rim: boolean) => (shader: THREE.WebGLProgramParametersWithUniforms) => {
       shader.uniforms.uLoopBend = this.bend;
       shader.uniforms.uLoopWave = this.wave;
+      shader.uniforms.uLoopJelly = this.jellyU;
       shader.vertexShader =
-        'uniform vec2 uLoopBend;\nuniform vec3 uLoopWave;\n' +
+        'uniform vec2 uLoopBend;\nuniform vec3 uLoopWave;\nuniform vec3 uLoopJelly;\n' +
         shader.vertexShader.replace(
           '#include <begin_vertex>',
           `#include <begin_vertex>
           float loopK = clamp((uLoopWave.z - transformed.y) / uLoopWave.z, 0.0, 1.0);
           float loopW = loopK * loopK;
-          transformed.xz += uLoopBend * loopW;
+          float loopB = sin(clamp(transformed.y / ${BODY_HEIGHT.toFixed(3)}, 0.0, 1.0) * 3.14159265);
+          transformed.xz *= 1.0 + uLoopJelly.z * loopB;
+          transformed.xz += uLoopBend * loopW + uLoopJelly.xy * loopB;
           transformed.x += sin(transformed.y * 5.0 + uLoopWave.y) * uLoopWave.x * loopW;
           transformed.z += cos(transformed.y * 4.0 + uLoopWave.y * 0.8) * uLoopWave.x * loopW;`,
         );
+      if (rim) addRim(shader, this.rimU);
     };
+    this.bodyMat.onBeforeCompile = deform(true);
+    this.screenMat.onBeforeCompile = deform(false);
+    this.limbMat.onBeforeCompile = (shader) => addRim(shader, this.rimU);
 
     const body = new THREE.Mesh(createBodyGeometry(detail), this.bodyMat);
     body.name = 'Body';
@@ -232,9 +247,10 @@ export class Loop extends THREE.Group {
       mat.sheenRoughness = 0.55;
       mat.sheenColor.set(s.sheenColor ?? '#ffffff');
       mat.bumpMap = grain > 0 ? this.grainTex : null;
-      mat.bumpScale = grain * 0.35;
+      mat.bumpScale = grain * 0.25;
       mat.needsUpdate = true;
     }
+    this.rimU.value.set(s.rim ?? '#000000').multiplyScalar(0.3);
     return this;
   }
 
@@ -253,7 +269,7 @@ export class Loop extends THREE.Group {
   /** Display brightness: 0 = dark, 1 = default, 2 = vivid. */
   setGlow(amount: number): this {
     const g = clamp(amount, 0, 2);
-    this.screenMat.emissiveIntensity = 1.25 * g;
+    this.screenMat.emissiveIntensity = 1.9 * g;
     this.face.glow = Math.min(g, 1.4);
     return this;
   }
@@ -297,6 +313,7 @@ export class Loop extends THREE.Group {
   /** Flash an expression for `seconds`, then return to the resting one. */
   express(name: ExpressionName | (string & {}), seconds = 1.6): this {
     this.requireExpression(name);
+    if (this.tempExpression !== name) this.jelly.kick(1.3);
     this.tempExpression = name;
     this.tempTimer = seconds;
     return this;
@@ -360,7 +377,8 @@ export class Loop extends THREE.Group {
 
   /** A tap: jelly squish plus (optionally) a happy reaction. */
   poke(strength = 1): this {
-    this.jelly.kick(-2.6 * strength);
+    this.jelly.kick(-3.1 * strength);
+    this.wobX.kick((Math.random() - 0.5) * 1.2 * strength);
     this.tapCount = this.tapTimer > 0 ? this.tapCount + 1 : 1;
     this.tapTimer = 0.9;
     if (this.tapReactions) {
@@ -381,7 +399,7 @@ export class Loop extends THREE.Group {
   /** Begin dragging: Loop follows `moveTo` targets tightly and looks surprised. */
   grab(): this {
     this.held = true;
-    this.jelly.kick(1.6);
+    this.jelly.kick(2.6);
     this.express('surprised', 0.6);
     this.emit('grab', undefined);
     return this;
@@ -390,6 +408,7 @@ export class Loop extends THREE.Group {
   release(): this {
     if (!this.held) return this;
     this.held = false;
+    this.jelly.kick(-2);
     this.express('happy', 1);
     this.emit('release', undefined);
     return this;
@@ -434,8 +453,8 @@ export class Loop extends THREE.Group {
 
     // ── Travel: ease the target, then follow it on a soft spring → a glide
     // that starts gently, overshoots a touch and settles.
-    this.eased.lerp(this.goal, damp(this.held ? 16 : 3.4, dt));
-    const freq = this.held ? 11 : 6;
+    this.eased.lerp(this.goal, damp(this.held ? 20 : 5.5, dt));
+    const freq = this.held ? 13 : 8;
     for (const [s, v] of [[this.px, this.eased.x], [this.py, this.eased.y], [this.pz, this.eased.z]] as const) {
       s.freq = freq;
       s.target = v;
@@ -456,7 +475,7 @@ export class Loop extends THREE.Group {
     Object.assign(pose, zeroPose());
     if (this.gesture) {
       const g = this.gesture;
-      g.t += dt;
+      g.t += dt * 1.15;
       const p = g.t / g.def.duration;
       if (p >= 1) {
         this.gesture = null;
@@ -470,14 +489,27 @@ export class Loop extends THREE.Group {
     // ── Lean into travel; the base trails behind and wobbles to rest.
     const k = Math.max(m, 0.25);
     const st = this._state;
-    this.roll.target = clamp(-vx * 0.085, -0.5, 0.5) * k;
-    this.lean.target = clamp(vz * 0.06 + vy * 0.012, -0.3, 0.3) * k;
-    this.bendX.target = clamp(-vx * 0.075, -0.34, 0.34) * k;
-    this.bendZ.target = clamp(-vz * 0.075, -0.3, 0.3) * k;
+    this.roll.target = clamp(-vx * 0.06, -0.4, 0.4) * k;
+    this.lean.target = clamp(vz * 0.05 + vy * 0.01, -0.3, 0.3) * k;
+    this.bendX.target = clamp(-vx * 0.06, -0.26, 0.26) * k;
+    this.bendZ.target = clamp(-vz * 0.06, -0.24, 0.24) * k;
+    // Jelly: the belly lags behind changes of speed, and the body squashes
+    // when it brakes or is pushed upward.
+    if (dt > 0) {
+      const ax = (vx - this.prevV.x) / dt;
+      const ay = (vy - this.prevV.y) / dt;
+      const az = (vz - this.prevV.z) / dt;
+      this.wobX.target = clamp(-ax * 0.006, -0.16, 0.16) * k;
+      this.wobZ.target = clamp(-az * 0.006, -0.14, 0.14) * k;
+      this.jelly.target = clamp(-ay * 0.004, -0.14, 0.14) * k;
+      this.prevV.set(vx, vy, vz);
+    }
     this.roll.update(dt);
     this.lean.update(dt);
     this.bendX.update(dt);
     this.bendZ.update(dt);
+    this.wobX.update(dt);
+    this.wobZ.update(dt);
     this.jelly.update(dt);
     this.approach.target = st === 'listening' ? 0.32 : 0;
     this.approach.update(dt);
@@ -508,11 +540,11 @@ export class Loop extends THREE.Group {
 
     // ── Hover: slow layered bob and sway.
     const slow = asleep ? 0.55 : 1;
-    const bob = (Math.sin(t * 1.75 * slow) * 0.055 + Math.sin(t * 0.93 * slow + 1.3) * 0.022) * m * (asleep ? 1.4 : 1);
+    const bob = (Math.sin(t * 2.3 * slow) * 0.06 + Math.sin(t * 1.2 * slow + 1.3) * 0.024) * m * (asleep ? 1.4 : 1);
     const sway = Math.sin(t * 0.62 + 0.4) * 0.035 * m;
     const idleRoll = Math.sin(t * 0.81) * 0.024 * m + (st === 'listening' ? 0.07 : 0) + (asleep ? 0.06 : 0);
     const hover = this.hoverHeight * lerp(0.45, 1, m) * (asleep ? 0.45 : 1);
-    const breath = Math.sin(t * (asleep ? 1.1 : 1.9)) * 0.008 * Math.max(m, 0.4);
+    const breath = Math.sin(t * (asleep ? 1.2 : 2.3) + 0.6) * 0.016 * Math.max(m, 0.4);
 
     const model = this.model;
     model.position.set(
@@ -528,38 +560,50 @@ export class Loop extends THREE.Group {
     );
 
     // ── Squash & stretch, volume-preserving.
-    const sy = 1 + breath + this.jelly.value + pose.stretch + clamp(Math.abs(vy) * 0.035, 0, 0.14) * k;
-    const sxz = 1 / Math.sqrt(Math.max(sy, 0.3));
+    const sy = clamp(
+      1 + breath + this.jelly.value + pose.stretch + clamp(Math.abs(vy) * 0.045 + Math.abs(vx) * 0.012, 0, 0.2) * k,
+      0.68, 1.4,
+    );
+    const sxz = 1 / Math.sqrt(sy);
     this.squash.scale.set(sxz, sy, sxz);
+    // Squashing pushes the belly out; stretching draws it in.
+    const bulge = clamp((1 - sy) * 0.7, -0.1, 0.22) + Math.sin(t * 2.3 + 2.2) * 0.012 * m;
+    const wx = this.wobX.value + Math.sin(t * 3.1) * 0.007 * m;
+    const wz = this.wobZ.value + Math.cos(t * 2.7) * 0.005 * m;
+    this.jellyU.value.set(wx, wz, bulge);
 
     // ── Trailing bend + hem ripple (shader), and limbs that lag a beat behind.
     this.bend.value.set(this.bendX.value, this.bendZ.value);
-    this.wave.value.x = (0.012 + Math.min(speed, 4) * 0.006) * m;
-    this.wave.value.y = t * 2.3;
+    this.wave.value.x = (0.016 + Math.min(speed, 5) * 0.007) * m;
+    this.wave.value.y = t * 3.2;
 
     this.feet.forEach((foot, i) => {
       const side = i === 0 ? -1 : 1;
       const fx = this.feetX[i];
       const fy = this.feetY[i];
-      fx.target = this.bendX.value * 1.2;
-      fy.target = clamp(-vy * 0.04, -0.1, 0.12) * k + Math.sin(t * 1.75 + i * 2.2) * 0.018 * m;
+      fx.target = this.bendX.value;
+      fy.target = clamp(-vy * 0.04, -0.1, 0.12) * k + Math.sin(t * 2.3 + i * 2.2) * 0.022 * m;
       fx.update(dt);
       fy.update(dt);
       const a = ANCHORS.foot(side);
-      foot.position.set(a.x + fx.value, a.y + fy.value, a.z + this.bendZ.value * 1.1);
+      foot.position.set(a.x + fx.value, a.y + fy.value, a.z + this.bendZ.value);
       foot.rotation.set(-this.bendZ.value * 1.6 + fy.value * 1.5, 0, fx.value * 1.4);
     });
 
     this.arms.forEach((arm, i) => {
       const side = i === 0 ? -1 : 1;
       const sw = this.armSwing[i];
-      sw.target = clamp(vx * 0.16, -0.6, 0.6) * k;
+      sw.target = clamp(vx * 0.14, -0.7, 0.7) * k;
       sw.update(dt);
       const raise =
         ARM_REST + (i === 0 ? pose.armL : pose.armR) +
-        Math.sin(t * 1.75 + 0.8 + i) * 0.07 * m +
+        Math.sin(t * 2.3 + 0.8 + i) * 0.08 * m +
         clamp(-vy * 0.22, -0.2, 0.9) * k +
         Math.max(0, -this.jelly.value) * 2.2;
+      // Keep the shoulders seated on the wobbling, bulging belly.
+      const a = ANCHORS.shoulder(side);
+      const b = Math.sin((a.y / BODY_HEIGHT) * Math.PI);
+      arm.position.set(a.x * (1 + bulge * b) + wx * b, a.y, a.z * (1 + bulge * b) + wz * b);
       arm.rotation.set(-this.bendZ.value * 0.8, 0, side * raise + sw.value);
     });
 
@@ -672,6 +716,19 @@ export class Loop extends THREE.Group {
   }
 }
 
+/** Adds a soft glow at grazing angles so the shell reads as slightly translucent. */
+function addRim(shader: THREE.WebGLProgramParametersWithUniforms, color: { value: THREE.Color }): void {
+  shader.uniforms.uLoopRim = color;
+  shader.fragmentShader =
+    'uniform vec3 uLoopRim;\n' +
+    shader.fragmentShader.replace(
+      '#include <emissivemap_fragment>',
+      `#include <emissivemap_fragment>
+      float loopRim = 1.0 - clamp(abs(dot(normalize(normal), normalize(vViewPosition))), 0.0, 1.0);
+      totalEmissiveRadiance += uLoopRim * loopRim * loopRim * loopRim;`,
+    );
+}
+
 function createShadow(): THREE.Mesh {
   const size = 128;
   const canvas = document.createElement('canvas');
@@ -699,7 +756,7 @@ function createShadow(): THREE.Mesh {
 
 /** Fine noise used as a bump map for the soft-touch finish. */
 function createGrainTexture(): THREE.Texture {
-  const size = 256;
+  const size = 512;
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext('2d')!;
@@ -711,6 +768,6 @@ function createGrainTexture(): THREE.Texture {
   ctx.putImageData(img, 0, 0);
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(9, 6);
+  tex.repeat.set(14, 9);
   return tex;
 }

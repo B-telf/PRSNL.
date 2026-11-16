@@ -119,10 +119,10 @@ export class LoopStage {
     this.env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     pmrem.dispose();
     this.scene.environment = this.env;
-    this.scene.environmentIntensity = 0.55;
-    const key = new THREE.DirectionalLight(0xfff4e6, 2.3);
+    this.scene.environmentIntensity = 0.75;
+    const key = new THREE.DirectionalLight(0xfff4e6, 2.6);
     key.position.set(2.5, 5, 4);
-    const rim = new THREE.DirectionalLight(0xbfe9ff, 1.2);
+    const rim = new THREE.DirectionalLight(0xbfe9ff, 1.8);
     rim.position.set(-3.5, 2.5, -3);
     const fill = new THREE.DirectionalLight(0xffe8d6, 0.5);
     fill.position.set(-3, 1, 4);
@@ -227,6 +227,7 @@ export class LoopStage {
   private resize(): void {
     const w = Math.max(1, this.container.clientWidth);
     const h = Math.max(1, this.container.clientHeight);
+    const changed = w !== this.width || h !== this.height;
     this.width = w;
     this.height = h;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.opts.maxPixelRatio));
@@ -256,7 +257,7 @@ export class LoopStage {
       a === 'center' ? centerY - LOOP_HEIGHT * 0.5 - this.loop.hoverHeight : 0,
       0,
     );
-    if (this.loop && !this.pinned && !this.dragging) this.loop.moveTo(this.home.x, this.home.y, this.home.z);
+    if (this.loop && changed && !this.pinned && !this.dragging) this.loop.moveTo(this.home.x, this.home.y, this.home.z);
     if (this.loop && !this.running) this.renderer.render(this.scene, this.camera);
   }
 

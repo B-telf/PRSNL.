@@ -67,11 +67,11 @@ function surfacePoint(theta: number, y: number, r: number, out: THREE.Vector3): 
 
 /**
  * The shell: a tapered capsule with the face opening pressed into it.
- * `detail` scales tessellation (1 ≈ 60k triangles).
+ * `detail` scales tessellation (1 ≈ 115k triangles).
  */
 export function createBodyGeometry(detail = 1): THREE.BufferGeometry {
-  const NU = Math.round(224 * detail); // around
-  const NV = Math.round(136 * detail); // bottom → top
+  const NU = Math.round(320 * detail); // around
+  const NV = Math.round(180 * detail); // bottom → top
   const v = SHAPE.visor;
   const positions = new Float32Array((NU + 1) * (NV + 1) * 3);
   const uvs = new Float32Array((NU + 1) * (NV + 1) * 2);
@@ -142,20 +142,31 @@ export function createBodyGeometry(detail = 1): THREE.BufferGeometry {
 }
 
 /**
- * Alpha mask that cuts the face opening out of the shell (use as the shell's
- * `map` with `alphaTest: 0.5`). It stores a soft gradient across the edge, so
- * the cut-out stays smooth at any zoom instead of following the mesh's facets.
+ * The shell's `map`. Its alpha cuts out the face opening (use `alphaTest: 0.5`);
+ * it stores a soft gradient across the edge, so the cut-out stays smooth at any
+ * zoom instead of following the mesh's facets. Its colour carries gentle baked
+ * shading: darker towards the base and inside the rim.
  */
 export function createVisorMask(size = 1024): THREE.DataTexture {
   const data = new Uint8Array(size * size * 4).fill(255);
   for (let j = 0; j < size; j++) {
     const phi = ((j + 0.5) / size - 0.5) * Math.PI;
-    if (phi <= 0) continue; // the opening is entirely above the waist
-    const y = SHAPE.waistY + SHAPE.upperH * Math.pow(Math.sin(phi), 2 / SHAPE.upperN);
+    const sn = Math.sin(phi);
+    const y =
+      sn >= 0
+        ? SHAPE.waistY + SHAPE.upperH * Math.pow(sn, 2 / SHAPE.upperN)
+        : SHAPE.waistY - SHAPE.lowerH * Math.pow(-sn, 2 / SHAPE.lowerN);
+    // Depth cue: the shell is a touch deeper in tone towards its base.
+    const height = 0.8 + 0.2 * Math.min(1, Math.max(0, y / (BODY_HEIGHT * 0.75)));
     for (let i = 0; i < size; i++) {
       const theta = ((i + 0.5) / size) * Math.PI * 2 - Math.PI;
-      const a = 0.5 + (visorField(theta, y) - 1) * 6;
-      data[(j * size + i) * 4 + 3] = Math.round(Math.min(1, Math.max(0, a)) * 255);
+      const f = visorField(theta, y);
+      const k = (j * size + i) * 4;
+      // Soft occlusion inside the rim, where the shell dips towards the display.
+      const rim = Math.min(1, Math.max(0, (f - 1) / RIM));
+      const shade = Math.round(255 * height * (0.62 + 0.38 * rim * (2 - rim)));
+      data[k] = data[k + 1] = data[k + 2] = shade;
+      data[k + 3] = Math.round(Math.min(1, Math.max(0, 0.5 + (f - 1) * 6)) * 255);
     }
   }
   const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);

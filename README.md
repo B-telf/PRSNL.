@@ -5,9 +5,10 @@ customization catalog, built as an interactive 3D module you can drop into an ap
 
 - **Procedural model** – tall capsule body, inset dark display, two warm eyes and a
   small mouth, flipper arms, low feet. No external assets to load.
-- **Ghost-like motion** – Loop hovers rather than walks. It glides with a soft start
-  and a slight overshoot, leans into travel, and its base and feet trail behind and
-  wobble to rest.
+- **Ghost-like, jelly motion** – Loop hovers rather than walks. It darts with a soft
+  start and an overshoot, leans into travel, and its body behaves like jelly: the
+  base trails behind, the belly wobbles on every change of speed and bulges when
+  it squashes.
 - **Interactive** – eyes and head follow the pointer, tapping squishes it, it can be
   picked up and carried, and it can float to any point or DOM element.
 - **App states** – `idle`, `listening`, `thinking`, `speaking`, `sleeping`, plus
@@ -148,7 +149,7 @@ Methods: `floatTo(clientX, clientY)`, `floatToElement(el, side)`, `goHome()`,
 
 ## The model file
 
-`assets/loop.glb` is the static model in its rest pose (≈73k triangles, six meshes:
+`assets/loop.glb` is the static model in its rest pose (≈127k triangles, six meshes:
 `Body`, `Display`, `ArmL`, `ArmR`, `FootL`, `FootR`), about 2 units tall, facing +Z,
 with the body's base at the origin. The face is baked into the display's emissive
 texture. The hover, trailing and expressions are done in code by this library, so
