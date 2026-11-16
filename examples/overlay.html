@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loop overlay example</title>
+<style>body{font:16px system-ui;margin:0;padding:24px;background:#f6f4ee;color:#12313a}button{font:inherit;padding:10px 16px;margin:6px 0}</style></head>
+<body>
+<h1>Host app page</h1>
+<p>Loop floats above this page. Buttons underneath stay clickable.</p>
+<button id="a">Underlying button</button> <span id="count">0</span>
+<p style="margin-top:240px"><button id="b">Come here</button></p>
+<prsnl-loop overlay size="170" anchor="bottom-right" id="l"></prsnl-loop>
+<script type="module">
+import { defineLoopElement } from '../src/index.ts';
+defineLoopElement();
+let n = 0;
+document.getElementById('a').onclick = () => (document.getElementById('count').textContent = ++n);
+const el = document.getElementById('l');
+window.el = el;
+document.getElementById('b').onclick = (e) => el.stage.floatToElement(e.target, 'right');
+</script>
+</body></html>

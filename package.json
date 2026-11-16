@@ -1,0 +1,38 @@
+{
+  "name": "@prsnl/loop",
+  "version": "0.1.0",
+  "description": "Loop — the PRSNL companion character. A procedural, interactive 3D model with ghost-like motion.",
+  "type": "module",
+  "main": "./dist/loop.js",
+  "module": "./dist/loop.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/loop.js"
+    }
+  },
+  "files": [
+    "dist",
+    "assets"
+  ],
+  "sideEffects": [
+    "./src/element.ts",
+    "./dist/loop.js"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && tsc -p tsconfig.build.json",
+    "build:demo": "vite build --config vite.demo.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "three": ">=0.162.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.187.0",
+    "three": "^0.187.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}

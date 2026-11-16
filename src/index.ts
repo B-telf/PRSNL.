@@ -1,0 +1,12 @@
+export { Loop } from './Loop';
+export type { LoopOptions, LoopEvents, LoopState, MotionLevel } from './Loop';
+export { LoopStage } from './LoopStage';
+export type { LoopStageOptions, Anchor } from './LoopStage';
+export { EXPRESSIONS, NEUTRAL } from './Face';
+export type { ExpressionName, EyeStyle, FaceParams } from './Face';
+export { GESTURES } from './gestures';
+export type { Gesture, GestureName, Pose } from './gestures';
+export { SKINS, EYE_COLORS } from './skins';
+export type { Skin, SkinName, EyeColorName } from './skins';
+export { PrsnlLoopElement, defineLoopElement } from './element';
+export { exportGLB } from './exportGLB';
