@@ -7,8 +7,7 @@
  * Start-up options come from `window.LoopConfig`, set by the host before load.
  */
 import { LoopStage, type Anchor, type LoopStageOptions } from '../src/LoopStage';
-import type { LoopState, MotionLevel } from '../src/Loop';
-import type { EyeStyle } from '../src/Face';
+import type { LoopState, MotionLevel, Slot } from '../src/Loop';
 
 type Host = {
   LoopConfig?: LoopStageOptions;
@@ -25,7 +24,7 @@ function post(type: string, data: Record<string, unknown> = {}): void {
 
 const stage = new LoopStage(null, {
   overlay: true,
-  size: 170,
+  size: 190,
   anchor: 'bottom-right',
   margin: 28,
   ...host.LoopConfig,
@@ -34,22 +33,30 @@ const loop = stage.loop;
 
 /** Everything the host app can ask Loop to do. */
 const methods: Record<string, (...args: any[]) => unknown> = {
+  // Base state and reactions
   setState: (state: LoopState) => loop.setState(state),
+  setSpeechLevel: (level: number) => loop.setSpeechLevel(level),
   play: (gesture: string) => void loop.play(gesture),
   express: (name: string, seconds?: number) => loop.express(name, seconds),
   setExpression: (name: string) => loop.setExpression(name),
   celebrate: () => void stage.celebrate(),
-  speak: (level?: number) => loop.speak(level ?? undefined),
+  quiet: () => loop.quiet(),
   poke: () => loop.poke(),
+  // Look and growth
   setSkin: (skin: any) => loop.setSkin(skin),
-  setEyeColor: (color: string, right?: string) => loop.setEyeColor(color, right),
-  setEyeStyle: (style: EyeStyle) => loop.setEyeStyle(style),
-  setMotion: (level: MotionLevel) => loop.setMotion(level),
+  equip: (slot: Slot, id: string) => loop.equip(slot, id),
+  setLight: (amount: number) => loop.setLight(amount),
   setGlow: (amount: number) => loop.setGlow(amount),
+  // Comfort
+  setMotion: (level: MotionLevel) => loop.setMotion(level),
+  setReducedMotion: (reduced: boolean) => loop.setReducedMotion(reduced),
   setParticles: (amount: number) => stage.setParticles(amount),
+  // Placement and visibility
   floatTo: (x: number, y: number) => stage.floatTo(x, y),
   goHome: () => stage.goHome(),
   setAnchor: (anchor: Anchor, margin?: number) => stage.setAnchor(anchor, margin),
+  show: () => stage.show(),
+  remove: () => stage.remove(),
 };
 
 const bridge = {

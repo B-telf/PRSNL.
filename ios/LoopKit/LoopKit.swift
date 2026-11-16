@@ -33,20 +33,28 @@ public enum LoopMotion: String {
 /// Start-up settings. Change them later through `LoopController`.
 public struct LoopConfiguration {
     /// Loop's height in points.
-    public var size: CGFloat = 170
+    public var size: CGFloat = 190
     public var anchor: LoopAnchor = .bottomRight
     /// Gap from the screen edges, in points. Leave room for the home indicator.
     public var margin: CGFloat = 40
-    /// "deep-teal", "porcelain" or "graphite".
-    public var skin: String = "deep-teal"
-    /// "warm-white", "ice-blue", "amber", or any CSS colour such as "#ff8a6b".
-    public var eyeColor: String = "warm-white"
+    /// Body material: "pearl", "smoke", "glacier" or "ember".
+    public var skin: String = "pearl"
+    /// Upper layer: "none", "ink", "ocean" or "moss".
+    public var outfit: String = "none"
+    /// "none", "silver" or "gold".
+    public var chain: String = "none"
+    /// "onyx", "ice" or "amber".
+    public var eyes: String = "onyx"
+    /// The user's cumulative light; sets the Soulform stage (0, 30, 90, 180).
+    public var light: Double = 0
     /// Leave nil to follow the device: expressive, or still when Reduce Motion is on.
     public var motion: LoopMotion?
     /// The user can pick Loop up and carry it.
     public var draggable = true
     /// After being carried, Loop floats back to its anchor.
     public var returnsHome = false
+    /// Seconds of idle before Loop falls asleep (0 = never).
+    public var sleepAfter: Double = 180
     /// Play a light haptic when Loop is tapped.
     public var haptics = true
 
@@ -84,39 +92,62 @@ public final class LoopController: NSObject, ObservableObject {
         super.init()
     }
 
-    // MARK: Things Loop can do
+    // MARK: Base state
 
+    /// What Loop is doing: `.idle`, `.listening`, `.thinking`, `.speaking`, `.sleeping`.
+    /// Gestures and expressions in progress are left alone.
     public func setState(_ state: LoopState) { call("setState", state.rawValue) }
 
-    /// Loop dances and confetti fills the screen.
+    /// Drive the mouth from real audio loudness, 0...1, while speaking. Send 0 when playback ends.
+    public func setSpeechLevel(_ level: Double) { call("setSpeechLevel", level) }
+
+    // MARK: Reactions
+
+    /// A verified milestone: Loop dances and confetti fills the screen. If Loop
+    /// is listening, thinking or speaking, it waits until idle. Visual only.
     public func celebrate() {
         if configuration.haptics { UINotificationFeedbackGenerator().notificationOccurred(.success) }
         call("celebrate")
     }
 
-    /// "wave", "nod", "shake", "stretch", "celebrate", "dance", "spin",
-    /// "shuffle", "wiggle", "tilt", "startle".
+    /// "wave", "nod", "shake", "spin", "celebration", "stretch", "shuffle",
+    /// "wiggle", "tilt", "startle". Plays on top of the current state.
     public func play(_ gesture: String) { call("play", gesture) }
 
-    /// Flash an expression, then return to the resting one. Names: "happy",
-    /// "joy", "laugh", "knowing", "curious", "attentive", "thinking",
-    /// "surprised", "sleepy", "unimpressed", "sideEye", "concerned", "sad",
-    /// "determined", "wink".
+    /// Flash an expression, then return to the resting one: "neutral", "joy",
+    /// "concerned", "focused", "proud", "quiet", "happy", "attentive",
+    /// "curious", "surprised", "laugh", "sleepy", "wink".
+    /// "concerned" and "quiet" also cancel any celebration and confetti.
     public func express(_ name: String, seconds: Double = 1.6) { call("express", name, seconds) }
 
-    /// Move Loop's mouth. Call repeatedly with a 0...1 loudness while audio
-    /// plays, or use `setState(.speaking)` for automatic movement.
-    public func speak(level: Double) { call("speak", level) }
+    /// Stop celebrating right now (cancels the dance, queued celebrations and confetti).
+    public func quiet() { call("quiet") }
 
+    // MARK: Look and growth
+
+    /// Body material: "pearl", "smoke", "glacier", "ember".
     public func setSkin(_ skin: String) { call("setSkin", skin) }
-    public func setEyeColor(_ color: String) { call("setEyeColor", color) }
-    /// "oval", "pixel" or "outline".
-    public func setEyeStyle(_ style: String) { call("setEyeStyle", style) }
-    public func setMotion(_ motion: LoopMotion) { call("setMotion", motion.rawValue) }
-    /// Display brightness, 0...2.
+
+    /// Put something on. Slots and items:
+    /// "outfit": "none", "ink", "ocean", "moss" · "chain": "none", "silver", "gold" ·
+    /// "eyes": "onyx", "ice", "amber".
+    public func equip(_ slot: String, _ item: String) { call("equip", slot, item) }
+
+    /// Show the user's cumulative light. Loop renders the matching Soulform
+    /// stage. What earns light is decided by your server, never by this call.
+    public func setLight(_ amount: Double) { call("setLight", amount) }
+
+    /// Strength of the chest light and body glow, 0...2.
     public func setGlow(_ amount: Double) { call("setGlow", amount) }
+
+    // MARK: Comfort
+
+    public func setMotion(_ motion: LoopMotion) { call("setMotion", motion.rawValue) }
+    public func setReducedMotion(_ reduced: Bool) { call("setReducedMotion", reduced) }
     /// Confetti amount when celebrating: 0 = none, 1 = default.
     public func setConfetti(_ amount: Double) { call("setParticles", amount) }
+
+    // MARK: Position and visibility
 
     /// Float so Loop's middle sits at a point in screen coordinates.
     public func float(to point: CGPoint) { call("floatTo", point.x, point.y) }
@@ -124,13 +155,26 @@ public final class LoopController: NSObject, ObservableObject {
     public func goHome() { call("goHome") }
     public func setAnchor(_ anchor: LoopAnchor) { call("setAnchor", anchor.rawValue) }
 
+    /// Hide Loop on screens where it would be in the way (camera, payment,
+    /// video). Stops rendering and clears confetti. Call `show()` to return.
+    public func remove() {
+        call("remove")
+        overlayWindow?.isHidden = true
+    }
+
+    /// Bring Loop back after `remove()`.
+    public func show() {
+        overlayWindow?.isHidden = false
+        call("show")
+    }
+
     // MARK: Placing Loop on screen
 
     /// Puts Loop above everything in the scene, including sheets. Touches
     /// that miss Loop pass straight through to your app. Safe to call again.
     public func install(in scene: UIWindowScene) {
         if let overlayWindow, overlayWindow.windowScene === scene { return }
-        remove()
+        destroy()
 
         let host = UIViewController()
         host.view.backgroundColor = .clear
@@ -148,8 +192,9 @@ public final class LoopController: NSObject, ObservableObject {
         overlayWindow = window
     }
 
-    /// Takes Loop off screen.
-    public func remove() {
+    /// Tear Loop down for good and release its window. Create a new
+    /// controller (or call `install` again) to bring it back.
+    public func destroy() {
         storedWebView?.removeFromSuperview()
         overlayWindow?.isHidden = true
         overlayWindow = nil
@@ -199,7 +244,11 @@ public final class LoopController: NSObject, ObservableObject {
             "anchor": c.anchor.rawValue,
             "margin": Double(c.margin),
             "skin": c.skin,
-            "eyeColor": c.eyeColor,
+            "outfit": c.outfit,
+            "chain": c.chain,
+            "eyes": c.eyes,
+            "light": c.light,
+            "sleepAfter": c.sleepAfter,
             "draggable": c.draggable,
             "returnHome": c.returnsHome,
         ]

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { clamp, damp, lerp } from './spring';
 
-/** Everything the display can draw. All values blend smoothly. */
+/** Everything the face can show. All values blend smoothly. */
 export interface FaceParams {
   /** 1 = eyes open, 0 = shut. */
   open: number;
@@ -10,7 +10,7 @@ export interface FaceParams {
   /** Eye size multipliers. */
   eyeW: number;
   eyeH: number;
-  /** Inward tilt of the eyes in radians (+ = stern, − = worried). */
+  /** Inward tilt of the eyes in radians (+ = confident, − = worried). */
   tilt: number;
   /** Upper lid: 0 = none, 1 = eye fully covered from the top. */
   lid: number;
@@ -31,43 +31,41 @@ export interface FaceParams {
 }
 
 export const NEUTRAL: FaceParams = {
-  open: 1, arch: 0, eyeW: 1, eyeH: 1, tilt: 0, lid: 0,
+  open: 1, arch: 0, eyeW: 1, eyeH: 1, tilt: 0.1, lid: 0.2,
   scaleL: 1, scaleR: 1, raiseL: 0, raiseR: 0,
-  smile: 0.55, mouthOpen: 0, mouthW: 1, skew: 0, dots: 0,
+  smile: 0.55, mouthOpen: 0, mouthW: 1, skew: 0.45, dots: 0,
 };
 
-const x = (o: Partial<FaceParams>): FaceParams => ({ ...NEUTRAL, ...o });
+const x = (o: Partial<FaceParams>): FaceParams => ({ ...NEUTRAL, tilt: 0, lid: 0, skew: 0, ...o });
 
 /** Built-in expressions. Add your own with `Loop.defineExpression`. */
 export const EXPRESSIONS = {
-  neutral: x({}),
-  happy: x({ arch: 1, smile: 1, mouthW: 1.25, raiseL: 0.03, raiseR: 0.03 }),
-  joy: x({ arch: 1, smile: 1, mouthOpen: 0.8, mouthW: 1.3, raiseL: 0.05, raiseR: 0.05 }),
-  laugh: x({ arch: 1, smile: 1, mouthOpen: 1, mouthW: 1.25, raiseL: 0.08, raiseR: 0.08, eyeW: 1.1 }),
-  knowing: x({ smile: 0.9, skew: 0.9, lid: 0.3, mouthW: 1.2 }),
-  curious: x({ scaleR: 1.3, raiseR: 0.14, scaleL: 0.85, smile: 0.2, mouthW: 0.6 }),
-  attentive: x({ eyeH: 1.14, eyeW: 1.1, smile: 0.45, mouthW: 0.8, raiseL: 0.03, raiseR: 0.03 }),
-  thinking: x({ lid: 0.22, smile: 0, mouthW: 0.6, dots: 1, raiseL: 0.07, raiseR: 0.07 }),
-  surprised: x({ eyeH: 1.22, eyeW: 1.35, smile: 0, mouthOpen: 0.85, mouthW: 0.5, raiseL: 0.07, raiseR: 0.07 }),
+  /** Calm, self-assured: a level lid and a small one-sided smile. */
+  neutral: { ...NEUTRAL },
+  joy: x({ arch: 1, smile: 1, mouthOpen: 0.7, mouthW: 1.2, raiseL: 0.04, raiseR: 0.04 }),
+  happy: x({ arch: 1, smile: 1, mouthW: 1.2, raiseL: 0.03, raiseR: 0.03 }),
+  proud: x({ lid: 0.34, tilt: 0.16, smile: 0.95, skew: 0.5, mouthW: 1.25, raiseL: 0.03, raiseR: 0.03 }),
+  focused: x({ lid: 0.3, tilt: 0.2, smile: 0.1, mouthW: 0.7, eyeH: 0.92 }),
+  quiet: x({ lid: 0.46, smile: 0.25, mouthW: 0.7, eyeH: 0.9 }),
+  concerned: x({ tilt: -0.3, smile: -0.4, mouthW: 0.75, eyeH: 0.95, raiseL: 0.03, raiseR: 0.03 }),
+  attentive: x({ eyeH: 1.12, eyeW: 1.06, smile: 0.4, mouthW: 0.8, raiseL: 0.03, raiseR: 0.03 }),
+  thinking: x({ lid: 0.2, smile: 0, mouthW: 0.6, dots: 1, raiseL: 0.06, raiseR: 0.06 }),
+  curious: x({ scaleR: 1.22, raiseR: 0.1, scaleL: 0.9, smile: 0.25, mouthW: 0.65 }),
+  surprised: x({ eyeH: 1.16, eyeW: 1.2, smile: 0, mouthOpen: 0.7, mouthW: 0.5, raiseL: 0.06, raiseR: 0.06 }),
+  laugh: x({ arch: 1, smile: 1, mouthOpen: 1, mouthW: 1.2, raiseL: 0.06, raiseR: 0.06 }),
   sleepy: x({ lid: 0.6, eyeH: 0.85, smile: 0.2, mouthW: 0.7 }),
-  asleep: x({ arch: -1, smile: 0.1, mouthW: 0.5 }),
-  unimpressed: x({ lid: 0.55, smile: -0.05, mouthW: 0.8 }),
-  sideEye: x({ lid: 0.35, smile: 0.4, skew: -0.7 }),
-  concerned: x({ tilt: -0.34, smile: -0.6, mouthW: 0.8, eyeH: 0.95, raiseL: 0.03, raiseR: 0.03 }),
-  sad: x({ tilt: -0.42, smile: -1, lid: 0.22, eyeH: 0.88, mouthW: 0.9 }),
-  determined: x({ tilt: 0.32, lid: 0.25, smile: 0.3, mouthW: 0.9 }),
-  wink: x({ smile: 1, skew: 0.5, mouthW: 1.15 }),
+  asleep: x({ arch: -1, smile: 0.15, mouthW: 0.5 }),
+  wink: x({ smile: 1, skew: 0.5, mouthW: 1.1 }),
 } satisfies Record<string, FaceParams>;
 
 export type ExpressionName = keyof typeof EXPRESSIONS;
-export type EyeStyle = 'oval' | 'pixel' | 'outline';
 
-const W = 752;
-const H = 368;
+const W = 760;
+const H = 440;
 const KEYS = Object.keys(NEUTRAL) as (keyof FaceParams)[];
 
 /**
- * Loop's face: a 2D canvas mapped onto the display as an emissive texture.
+ * Loop's face: a transparent 2D canvas laid over the front of the head.
  * Drawing in 2D keeps every expression cheap and lets them morph freely.
  */
 export class Face {
@@ -76,13 +74,10 @@ export class Face {
   readonly params: FaceParams = { ...NEUTRAL };
   target: FaceParams = { ...NEUTRAL };
 
-  color = '#fff1dc';
-  /** Optional different colour for the screen-right eye ("Split Accent"). */
-  colorRight: string | null = null;
-  style: EyeStyle = 'oval';
-  /** 0…1 blur halo around lit shapes. */
-  glow = 1;
-  /** Gaze within the display, −1 … 1. */
+  color = '#16171c';
+  /** 0…1 soft glow around the eyes (used by the coloured eyes). */
+  glow = 0;
+  /** Gaze, −1 … 1. */
   lookX = 0;
   lookY = 0;
   /** Extra eyelid closure from blinking, 0 … 1. */
@@ -107,11 +102,6 @@ export class Face {
     this.draw();
   }
 
-  /** Jump straight to the target expression (no morph). */
-  snap(): void {
-    Object.assign(this.params, this.target);
-  }
-
   update(dt: number): void {
     this.time += dt;
     const k = damp(13, dt);
@@ -125,91 +115,88 @@ export class Face {
     const key =
       KEYS.map((k) => p[k].toFixed(3)).join() +
       [this.lookX, this.lookY, this.blink, this.winkRight, this.talk, this.glow].map((v) => v.toFixed(3)).join() +
-      this.color + this.colorRight + this.style + (animated ? this.time.toFixed(2) : '');
+      this.color + (animated ? this.time.toFixed(2) : '');
     if (key === this.lastKey) return;
     this.lastKey = key;
 
     const c = this.ctx;
     c.setTransform(1, 0, 0, 1, 0, 0);
-    c.shadowBlur = 0;
-    c.globalAlpha = 1;
-    c.fillStyle = '#000';
-    c.fillRect(0, 0, W, H);
+    c.clearRect(0, 0, W, H);
 
-    const gx = this.lookX * W * 0.085;
-    const gy = -this.lookY * H * 0.13;
-    const eyeY = H * 0.4 + gy;
-    const spread = W * 0.205;
-
-    this.eye(W / 2 - spread + gx, eyeY, -1, p.scaleL, p.raiseL, this.blink, this.color);
-    this.eye(
-      W / 2 + spread + gx, eyeY, 1, p.scaleR, p.raiseR,
-      Math.max(this.blink, this.winkRight), this.colorRight ?? this.color,
-    );
-    this.mouth(W / 2 + gx * 1.15, H * 0.76 + gy * 0.7);
+    const gx = this.lookX * W * 0.05;
+    const gy = -this.lookY * H * 0.05;
+    const eyeY = H * 0.42 + gy;
+    const spread = W * 0.235;
+    this.eye(W / 2 - spread + gx, eyeY, -1, p.scaleL, p.raiseL, this.blink);
+    this.eye(W / 2 + spread + gx, eyeY, 1, p.scaleR, p.raiseR, Math.max(this.blink, this.winkRight));
+    this.mouth(W / 2 + gx * 1.1, H * 0.72 + gy * 0.8);
     this.texture.needsUpdate = true;
   }
 
-  private lit(color: string): void {
+  private ink(): void {
     const c = this.ctx;
-    c.fillStyle = color;
-    c.strokeStyle = color;
-    c.shadowColor = color;
-    c.shadowBlur = 38 * this.glow;
-    c.lineCap = this.style === 'pixel' ? 'butt' : 'round';
+    c.fillStyle = this.color;
+    c.strokeStyle = this.color;
+    c.shadowColor = this.color;
+    c.shadowBlur = 22 * this.glow;
+    c.lineCap = 'round';
     c.lineJoin = 'round';
   }
 
-  private eye(cx: number, cy: number, side: number, scale: number, raise: number, shut: number, color: string): void {
+  private eye(cx: number, cy: number, side: number, scale: number, raise: number, shut: number): void {
     const p = this.params;
     const c = this.ctx;
-    const w = 58 * p.eyeW * scale;
-    const h = 150 * p.eyeH * scale;
+    const w = 76 * p.eyeW * scale;
+    const h = 124 * p.eyeH * scale;
     const arch = clamp(p.arch, -1, 1);
     const a = Math.abs(arch);
     const open = clamp(p.open * (1 - shut), 0, 1);
 
     c.save();
     c.translate(cx, cy - raise * H);
-    // The small constant counters the lean the curved display adds.
-    c.rotate(side * (p.tilt + 0.04));
-    this.lit(color);
+    // Positive tilt lowers the inner corner of each eye.
+    c.rotate(-side * p.tilt);
+    this.ink();
 
     if (a > 0.5) {
       // Arc eye: a dot that stretches sideways and bows.
       const t = (a - 0.5) * 2;
-      const half = w * 1.25 * t;
-      const bow = w * 1.0 * t * Math.sign(arch);
-      c.lineWidth = w * 0.72;
+      const half = w * 0.85 * t;
+      const bow = w * 0.7 * t * Math.sign(arch);
+      c.lineWidth = w * 0.42;
       c.beginPath();
       c.moveTo(-half, bow * 0.5);
       c.quadraticCurveTo(0, -bow * 1.5, half, bow * 0.5);
       c.stroke();
-      // A zero-length stroke draws nothing in some browsers; keep the dot solid.
       if (t < 0.08) {
         c.beginPath();
-        c.arc(0, 0, w * 0.36, 0, Math.PI * 2);
+        c.arc(0, 0, w * 0.21, 0, Math.PI * 2);
         c.fill();
       }
     } else {
       const t = a * 2;
-      const hh = Math.max(lerp(h, w * 0.72, t) * open, w * 0.16);
-      const ww = lerp(w, w * 0.72, t) * lerp(1.25, 1, Math.min(1, open * 3));
+      const hh = Math.max(lerp(h, w * 0.42, t) * open, w * 0.14);
+      const ww = lerp(w, w * 0.42, t) * lerp(1.2, 1, Math.min(1, open * 3));
+      c.save();
       if (p.lid > 0.01) {
         // Flat upper lid: clip away the top of the eye.
         c.beginPath();
         c.rect(-w * 2, -hh / 2 + hh * p.lid, w * 4, h * 2);
         c.clip();
       }
-      const r = this.style === 'pixel' ? 2 : Math.min(ww, hh) / 2;
       c.beginPath();
-      c.roundRect(-ww / 2, -hh / 2, ww, hh, r);
-      if (this.style === 'outline') {
-        c.lineWidth = 10;
-        c.stroke();
-      } else {
+      c.roundRect(-ww / 2, -hh / 2, ww, hh, Math.min(ww, hh) / 2);
+      c.fill();
+      // A soft catch-light keeps the eyes glossy rather than flat.
+      if (open > 0.5 && t < 0.3) {
+        c.shadowBlur = 0;
+        c.globalAlpha = 0.2 * (1 - t / 0.3);
+        c.fillStyle = '#ffffff';
+        c.beginPath();
+        c.ellipse(-ww * 0.16, -hh * 0.06, ww * 0.13, hh * 0.2, 0, 0, Math.PI * 2);
         c.fill();
       }
+      c.restore();
     }
     c.restore();
   }
@@ -218,21 +205,21 @@ export class Face {
     const p = this.params;
     const c = this.ctx;
     const alpha = 1 - clamp(p.dots, 0, 1);
-    const half = 50 * p.mouthW;
-    const curve = p.smile * 30;
+    const half = 46 * p.mouthW;
+    const curve = p.smile * 24;
     const open = clamp(p.mouthOpen + this.talk, 0, 1);
 
     c.save();
     c.translate(cx, cy);
-    this.lit(this.color);
+    this.ink();
+    c.shadowBlur = 0;
 
     if (alpha > 0.02) {
       c.globalAlpha = alpha;
-      const lift = p.skew * 13;
+      const lift = p.skew * 12;
       if (open > 0.06) {
-        // Open mouth: flat (or curved) top, rounded drop below.
-        const drop = 14 + open * 48;
-        const hw = half * lerp(1, 0.78, open);
+        const drop = 12 + open * 40;
+        const hw = half * lerp(1, 0.8, open);
         c.beginPath();
         c.moveTo(-hw, -curve * 0.5 + lift);
         c.quadraticCurveTo(0, curve * 0.5, hw, -curve * 0.5 - lift);
@@ -240,7 +227,7 @@ export class Face {
         c.closePath();
         c.fill();
       } else {
-        c.lineWidth = 13;
+        c.lineWidth = 10;
         c.beginPath();
         c.moveTo(-half, -curve * 0.5 + lift);
         c.quadraticCurveTo(p.skew * half * 0.5, curve * 1.5, half, -curve * 0.5 - lift);
@@ -251,10 +238,9 @@ export class Face {
     if (p.dots > 0.02) {
       c.globalAlpha = clamp(p.dots, 0, 1);
       for (let i = 0; i < 3; i++) {
-        const phase = this.time * 5.2 - i * 0.9;
-        const hop = Math.max(0, Math.sin(phase)) * 11;
+        const hop = Math.max(0, Math.sin(this.time * 5.2 - i * 0.9)) * 12;
         c.beginPath();
-        c.arc((i - 1) * 40, -hop * 1.3, 10, 0, Math.PI * 2);
+        c.arc((i - 1) * 34, -hop, 8, 0, Math.PI * 2);
         c.fill();
       }
     }

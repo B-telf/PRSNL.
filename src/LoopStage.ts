@@ -37,7 +37,7 @@ export interface LoopStageOptions extends LoopOptions {
   autoStart?: boolean;
 }
 
-const LOOP_HEIGHT = 2.1; // model units, feet to crown
+const LOOP_HEIGHT = 3.15; // model units, trail tip to crest, plus hover
 const FOV = 26;
 
 /**
@@ -67,6 +67,7 @@ export class LoopStage {
   private viewH = 4;
   private readonly home = new THREE.Vector3();
   private pinned = false;
+  private hidden = false;
   private pointerId: number | null = null;
   private downAt = { x: 0, y: 0, t: 0 };
   private dragging = false;
@@ -140,6 +141,7 @@ export class LoopStage {
     });
     this.scene.add(this.loop);
     this.loop.on('celebrate', () => this.fireConfetti());
+    this.loop.on('calm', () => this.confetti.clear());
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
@@ -147,7 +149,7 @@ export class LoopStage {
     this.loop.teleport(this.home.x, this.home.y, this.home.z);
 
     this.bindPointer();
-    const onVisibility = () => (document.hidden ? this.stop() : this.opts.autoStart && this.start());
+    const onVisibility = () => (document.hidden ? this.stop() : this.opts.autoStart && !this.hidden && this.start());
     document.addEventListener('visibilitychange', onVisibility);
     this.disposers.push(() => document.removeEventListener('visibilitychange', onVisibility));
     if (this.opts.autoStart) this.start();
@@ -193,9 +195,26 @@ export class LoopStage {
   /** Float next to a DOM element, e.g. a message bubble or a button. */
   floatToElement(el: Element, side: 'left' | 'right' | 'top' = 'right', gap = 12): void {
     const r = el.getBoundingClientRect();
-    const half = this.pixelSize() * 0.42;
+    const half = this.pixelSize() * 0.3;
     if (side === 'top') this.floatTo(r.left + r.width / 2, r.top - gap - this.pixelSize() / 2);
     else this.floatTo(side === 'right' ? r.right + gap + half : r.left - gap - half, r.top + r.height / 2);
+  }
+
+  /** Hide Loop and stop rendering (camera, payment, video screens). Clears confetti. */
+  remove(): void {
+    this.stop();
+    this.confetti.clear();
+    this.container.style.visibility = 'hidden';
+    if (this.hitPad) this.hitPad.style.pointerEvents = 'none';
+    this.hidden = true;
+  }
+
+  /** Bring Loop back after `remove()`. */
+  show(): void {
+    this.hidden = false;
+    this.container.style.visibility = '';
+    if (this.hitPad) this.hitPad.style.pointerEvents = 'auto';
+    this.start();
   }
 
   /** Loop dances while confetti fills the whole screen. Resolves when the dance ends. */
@@ -213,7 +232,7 @@ export class LoopStage {
     const r = this.canvas.getBoundingClientRect();
     const c = this.loop.getCenter(this.v).project(this.camera);
     const height = this.pixelSize();
-    const width = height * 0.8;
+    const width = height * 0.56;
     return {
       x: r.left + (c.x * 0.5 + 0.5) * r.width - width / 2,
       y: r.top + (-c.y * 0.5 + 0.5) * r.height - height / 2,
@@ -223,6 +242,7 @@ export class LoopStage {
   }
 
   private fireConfetti(): void {
+    if (this.hidden) return;
     // Calmer for people who asked for less motion; `particles` scales it further.
     const amount = this.opts.particles * (this.loop.motion === 'still' ? 0.3 : 1);
     if (amount <= 0) return;
@@ -234,7 +254,7 @@ export class LoopStage {
     const r = this.getScreenRect();
     const confetti = this.confetti;
     // A pop from Loop, cannons from both bottom corners, then a long drift from above.
-    confetti.burst({ x: r.x + r.width / 2, y: r.y + r.height * 0.3, count: n(90), spread: 150, speed: reach * 0.55 });
+    confetti.burst({ x: r.x + r.width / 2, y: r.y + r.height * 0.4, count: n(90), spread: 150, speed: reach * 0.55 });
     window.setTimeout(() => {
       confetti.burst({ x: -10, y: h + 10, count: n(150), angle: 66, spread: 50, speed: reach });
       confetti.burst({ x: w + 10, y: h + 10, count: n(150), angle: 114, spread: 50, speed: reach });
@@ -273,6 +293,11 @@ export class LoopStage {
     else this.canvas.remove();
   }
 
+  /** Same as `dispose`. */
+  destroy(): void {
+    this.dispose();
+  }
+
   // ───────────────────────────── Layout ─────────────────────────────
 
   private resize(): void {
@@ -285,8 +310,8 @@ export class LoopStage {
     this.renderer.setSize(w, h, false);
 
     // World units visible top-to-bottom at Loop's depth.
-    const fitted = LOOP_HEIGHT / 0.58;
-    this.viewH = this.opts.size ? (LOOP_HEIGHT * h) / this.opts.size : Math.max(fitted, (LOOP_HEIGHT * 1.25 * h) / w);
+    const fitted = LOOP_HEIGHT / 0.66;
+    this.viewH = this.opts.size ? (LOOP_HEIGHT * h) / this.opts.size : Math.max(fitted, (LOOP_HEIGHT * 0.9 * h) / w);
     const viewW = (this.viewH * w) / h;
     const unit = this.viewH / h; // world units per CSS px
     const m = this.opts.margin * unit;
@@ -301,7 +326,7 @@ export class LoopStage {
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
 
-    const edge = viewW / 2 - m - LOOP_HEIGHT * 0.42;
+    const edge = viewW / 2 - m - LOOP_HEIGHT * 0.3;
     const a = this.opts.anchor;
     this.home.set(
       a === 'bottom-left' ? -edge : a === 'bottom-right' ? edge : 0,
@@ -413,7 +438,7 @@ export class LoopStage {
 
   private clampToView(x: number, y: number): [number, number] {
     const viewW = (this.viewH * this.width) / this.height;
-    const halfW = Math.max(0, viewW / 2 - LOOP_HEIGHT * 0.45);
+    const halfW = Math.max(0, viewW / 2 - LOOP_HEIGHT * 0.3);
     const bottom = this.camera.position.y - this.viewH * 0.045 - this.viewH / 2;
     const top = bottom + this.viewH - LOOP_HEIGHT - 0.25;
     return [clamp(x, -halfW, halfW), clamp(y, Math.min(0, bottom + 0.1), Math.max(0, top))];

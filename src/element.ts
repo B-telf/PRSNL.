@@ -1,18 +1,17 @@
 import { LoopStage, type Anchor } from './LoopStage';
 import type { LoopState, MotionLevel } from './Loop';
-import type { EyeStyle } from './Face';
 
 /**
  * `<prsnl-loop>` — Loop as a custom element, usable from any framework.
  *
- *   <prsnl-loop skin="deep-teal" eyes="warm-white" motion="expressive"></prsnl-loop>
+ *   <prsnl-loop skin="pearl" outfit="ink" chain="silver" eyes="onyx"></prsnl-loop>
  *   <prsnl-loop overlay size="180" anchor="bottom-right"></prsnl-loop>
  *
  * Read `.loop` for the character API and `.stage` for placement. Fires
  * `loop-ready`, `loop-tap`, `loop-grab`, `loop-release`, `loop-arrive`, `loop-celebrate`.
  */
 export class PrsnlLoopElement extends HTMLElement {
-  static observedAttributes = ['skin', 'eyes', 'eye-style', 'motion', 'state', 'glow', 'anchor'];
+  static observedAttributes = ['skin', 'outfit', 'chain', 'eyes', 'motion', 'state', 'glow', 'light', 'anchor'];
   stage: LoopStage | null = null;
 
   get loop() {
@@ -42,8 +41,10 @@ export class PrsnlLoopElement extends HTMLElement {
       margin: num('margin'),
       anchor: (this.getAttribute('anchor') as Anchor) ?? undefined,
       skin: (this.getAttribute('skin') as any) ?? undefined,
-      eyeColor: this.getAttribute('eyes') ?? undefined,
-      eyeStyle: (this.getAttribute('eye-style') as EyeStyle) ?? undefined,
+      outfit: (this.getAttribute('outfit') as any) ?? undefined,
+      chain: (this.getAttribute('chain') as any) ?? undefined,
+      eyes: this.getAttribute('eyes') ?? undefined,
+      light: num('light'),
       motion: (this.getAttribute('motion') as MotionLevel) ?? undefined,
       glow: num('glow'),
       draggable: flag('draggable', true),
@@ -70,8 +71,8 @@ export class PrsnlLoopElement extends HTMLElement {
     const loop = this.loop;
     if (!loop || value === null) return;
     if (name === 'skin') loop.setSkin(value as any);
-    else if (name === 'eyes') loop.setEyeColor(value);
-    else if (name === 'eye-style') loop.setEyeStyle(value as EyeStyle);
+    else if (name === 'outfit' || name === 'chain' || name === 'eyes') loop.equip(name, value);
+    else if (name === 'light') loop.setLight(Number(value));
     else if (name === 'motion') loop.setMotion(value as MotionLevel);
     else if (name === 'state') loop.setState(value as LoopState);
     else if (name === 'glow') loop.setGlow(Number(value));
