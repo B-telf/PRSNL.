@@ -44,7 +44,7 @@ loop.on('statechange', ({ state }) => {
   });
 });
 
-document.getElementById('download')!.addEventListener('click', async () => {
+document.getElementById('download')?.addEventListener('click', async () => {
   const blob = new Blob([await exportGLB(loop)], { type: 'model/gltf-binary' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
