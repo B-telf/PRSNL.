@@ -24,6 +24,7 @@
     "dev": "vite",
     "build": "vite build && tsc -p tsconfig.build.json",
     "build:demo": "vite build --config vite.demo.config.ts",
+    "build:preview": "vite build --config vite.preview.config.ts",
     "build:ios": "vite build --config vite.embed.config.ts && node scripts/inline-embed.mjs",
     "typecheck": "tsc --noEmit"
   },

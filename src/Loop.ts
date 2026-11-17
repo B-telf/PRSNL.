@@ -1,16 +1,17 @@
 import * as THREE from 'three';
 import { EXPRESSIONS, Face, type ExpressionName, type FaceParams, NEUTRAL } from './Face';
 import {
-  ARM, DIM,
+  ARM, DIM, TORSO_SPINE, WISP_SPINE,
   createFaceGeometry, createHandGeometry, createHeadGeometry, createTorsoGeometry, createWispGeometry,
 } from './geometry';
-import { GESTURES, zeroPose, type Gesture, type GestureName, type Pose } from './gestures';
+import { GESTURES, GESTURE_ALIASES, zeroPose, type Gesture, type GestureName, type Pose } from './gestures';
 import {
   CHAINS, EYE_COLORS, OUTFITS, SKINS, SOULFORMS, soulformFor,
   type ChainName, type EyeColorName, type OutfitName, type Skin, type SkinName,
 } from './skins';
+import { SoftChain, makeSoft, type ChainShape } from './softbody';
 import { Spring, clamp, damp, lerp } from './spring';
-import { chestSurface, createChain, createCore, createOutfit } from './wearables';
+import { chestSurface, createChain, createCore, createOutfit, type Soften } from './wearables';
 
 /** How much Loop moves on its own. */
 export type MotionLevel = 'still' | 'subtle' | 'expressive';
@@ -20,6 +21,9 @@ export type LoopState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'sleepi
 
 /** Wearable slots. */
 export type Slot = 'outfit' | 'chain' | 'eyes';
+
+/** 'gentle' is an unhurried float, for journeys Loop makes on its own (returning to its dock). */
+export type Pace = 'normal' | 'gentle';
 
 export interface LoopOptions {
   skin?: SkinName | Skin;
@@ -57,8 +61,9 @@ export interface LoopEvents {
 type Handler<T> = (payload: T) => void;
 
 const MOTION: Record<MotionLevel, number> = { still: 0, subtle: 0.55, expressive: 1 };
+const TAU = Math.PI * 2;
 /** Gestures that read as celebration; concern cancels them. */
-const FESTIVE = new Set(['dance', 'celebrate', 'spin', 'shuffle', 'wiggle']);
+const FESTIVE = new Set(['flourish', 'lift', 'wiggle']);
 /** Expressions that ask for stillness. */
 const QUIETING = new Set(['concerned', 'quiet']);
 
@@ -70,16 +75,25 @@ const QUIETING = new Set(['concerned', 'quiet']);
  * A `THREE.Group` you can drop into any scene. Its origin is the point
  * beneath the trail. Call `update(dt)` every frame.
  *
+ * How it moves: Loop has intention at its centre, softness through its body
+ * and flowing motion at its edges. Only the head and upper torso are steered
+ * (by travel, dragging, states and gestures). The lower torso, every section
+ * of each wisp, each hand, the shirt's hem, the chain and the inner light all
+ * follow on their own, each with its own inertia, so nothing moves as one
+ * rigid piece.
+ *
  * Layers stay independent: the base state, a temporary gesture, a temporary
  * expression, the look (skin and wearables) and growth never overwrite each
  * other.
  */
 export class Loop extends THREE.Group {
   readonly face = new Face();
-  /** The visible model (everything except the ground shadow). */
+  /** Loop's centre: the head and upper torso, and everything attached to them. */
   readonly model = new THREE.Group();
   /** Where Loop is trying to be, in its parent's space. Prefer `moveTo`. */
   readonly goal = new THREE.Vector3();
+  /** Travel velocity, in the parent's space (read-only). */
+  readonly velocity = new THREE.Vector3();
   /** Height of the ground in parent space, or null if there is none. */
   ground: number | null = 0;
   /** Resting hover height above the ground point. */
@@ -95,18 +109,47 @@ export class Loop extends THREE.Group {
   private readonly head = new THREE.Group();
   private readonly hands: THREE.Mesh[] = [];
   private readonly bodyMat: THREE.MeshPhysicalMaterial;
-  private readonly trailMat: THREE.MeshPhysicalMaterial;
-  private readonly faceMat: THREE.MeshBasicMaterial;
+  private readonly torsoMat: THREE.MeshPhysicalMaterial;
+  private readonly wispMat: THREE.MeshPhysicalMaterial;
+  private readonly faceMesh: THREE.Mesh;
   private readonly core = createCore();
   private readonly orbit: THREE.Mesh;
   private readonly shadow: THREE.Mesh;
   private readonly hit: THREE.Mesh;
   private outfitGroup: THREE.Group | null = null;
-  private chainMesh: THREE.InstancedMesh | null = null;
-  private readonly bend = { value: new THREE.Vector2() };
-  private readonly wave = { value: new THREE.Vector3(0, 0, DIM.trailTop) };
+  private chainMesh: THREE.Mesh | null = null;
   private readonly rimU = { value: new THREE.Color() };
-  private readonly trailGlowU = { value: new THREE.Color() };
+  private readonly rimBase = new THREE.Color();
+  private readonly trailGlowU = { value: new THREE.Color(), top: DIM.trailTop };
+  private readonly flatU = { value: 0 };
+  private readonly flatColorU = { value: new THREE.Color(0.12, 0.12, 0.16) };
+  private readonly hemU = { value: new THREE.Vector3() };
+  private readonly drapeU = { value: new THREE.Vector3() };
+
+  // Soft body: the long ribbon (with the lower torso) and the short wisp.
+  private readonly ribbon = new SoftChain({
+    rest: TORSO_SPINE,
+    pinned: 2,
+    freq: [0, 0, 13, 23, 22, 21, 20, 19],
+    damping: [0, 0, 0.7, 0.46, 0.43, 0.4, 0.38, 0.36],
+    maxBend: [0, 0, 0.3, 0.7, 0.95, 1.1, 1.2, 1.3],
+    curl: [0, 0, 0.06, 0.3, 0.55, 0.8, 1, 1.15],
+  });
+  private readonly wisp = new SoftChain({
+    rest: WISP_SPINE,
+    pinned: 2,
+    freq: [0, 0, 22, 21, 20, 19, 18, 17],
+    damping: [0, 0, 0.48, 0.44, 0.41, 0.38, 0.36, 0.34],
+    maxBend: [0, 0, 0.7, 0.9, 1.05, 1.15, 1.25, 1.3],
+    curl: [0, 0, 0.25, 0.45, 0.7, 0.9, 1.05, 1.2],
+  });
+  private readonly ribbonShape: ChainShape = { phaseA: 0, phaseB: 0, amount: 1, spread: 0 };
+  private readonly wispShape: ChainShape = { phaseA: 0, phaseB: 0, amount: 1, spread: 0 };
+  private readonly wispPins = [new THREE.Vector3(), new THREE.Vector3()];
+  private readonly toSim = new THREE.Matrix4();
+  private readonly toBody = new THREE.Matrix4();
+  private readonly fromSim = new THREE.Matrix4();
+  private simFresh = true;
 
   // Look.
   private skin: Skin = SKINS.pearl;
@@ -115,33 +158,49 @@ export class Loop extends THREE.Group {
   private glowAmount = 1;
   private light = 0;
   private stage = 0;
+  private coreZ = 0;
 
-  // Motion.
+  // Travel.
   private m = 1;
   private level: MotionLevel = 'expressive';
   private time = 0;
+  /** Clock for the idle rhythms; runs slower when Loop is calm or asleep. */
+  private life = 0;
   private readonly eased = new THREE.Vector3();
-  private readonly px = new Spring(0, 8, 0.5);
-  private readonly py = new Spring(0, 8, 0.5);
-  private readonly pz = new Spring(0, 8, 0.5);
-  private readonly roll = new Spring(0, 8, 0.32);
-  private readonly lean = new Spring(0, 8, 0.36);
-  private readonly bendX = new Spring(0, 7.5, 0.22);
-  private readonly bendZ = new Spring(0, 7.5, 0.22);
-  private readonly yaw = new Spring(0, 8, 0.8);
-  private readonly pitch = new Spring(0, 8, 0.8);
-  private readonly jelly = new Spring(0, 13, 0.18);
-  private readonly approach = new Spring(0, 4, 0.9);
-  // The head floats a beat behind the body.
-  private readonly headX = new Spring(0, 10, 0.3);
-  private readonly headY = new Spring(0, 10, 0.34);
-  private readonly headYaw = new Spring(0, 9, 0.7);
-  private readonly headPitch = new Spring(0, 9, 0.7);
-  private readonly handX = [new Spring(0, 9, 0.3), new Spring(0, 8.2, 0.28)];
-  private readonly handY = [new Spring(0, 9, 0.32), new Spring(0, 8.2, 0.3)];
-  private readonly prevV = new THREE.Vector3();
+  private readonly px = new Spring(0, 9.5, 0.9);
+  private readonly py = new Spring(0, 9.5, 0.9);
+  private readonly pz = new Spring(0, 9.5, 0.9);
+  private pace: Pace = 'normal';
+  private depart = 0;
   private held = false;
   private travelling = false;
+
+  // The centre's own posture.
+  private readonly roll = new Spring(0, 11, 0.8);
+  private readonly lean = new Spring(0, 11, 0.8);
+  private readonly yaw = new Spring(0, 8, 0.85);
+  private readonly pitch = new Spring(0, 8, 0.85);
+  private readonly jelly = new Spring(0, 12, 0.36);
+  private readonly headYaw = new Spring(0, 10, 0.75);
+  private readonly headPitch = new Spring(0, 10, 0.75);
+  private readonly headRoll = new Spring(0, 9, 0.7);
+
+  // Followers.
+  private readonly handSprings = [0, 1].map((i) => [0, 1, 2].map(() => new Spring(0, i ? 12.2 : 13, i ? 0.72 : 0.75)));
+  private readonly hem = [new Spring(0, 10, 0.3), new Spring(0, 10, 0.3)];
+  private readonly drape = [new Spring(0, 8.5, 0.2), new Spring(0, 8.5, 0.2)];
+  private readonly coreLag = [new Spring(0, 12, 0.5), new Spring(0, 12, 0.5)];
+  private readonly leadPos = new THREE.Vector3();
+  private readonly leadVel = new THREE.Vector3();
+  private lastYaw = 0;
+
+  // Smoothed weights, so posture blends between states over a few hundred ms.
+  private wListen = 0;
+  private wThink = 0;
+  private wThinkTilt = 0;
+  private wSpeak = 0;
+  private wSleep = 0;
+  private wHush = 0;
 
   // Attention.
   private readonly lookTarget = new THREE.Vector3();
@@ -172,6 +231,9 @@ export class Loop extends THREE.Group {
 
   private readonly handlers = new Map<string, Set<Handler<any>>>();
   private readonly tmp = new THREE.Vector3();
+  private readonly tmp2 = new THREE.Vector3();
+  private readonly tmpQ = new THREE.Quaternion();
+  private readonly tmpE = new THREE.Euler();
 
   constructor(options: LoopOptions = {}) {
     super();
@@ -180,64 +242,54 @@ export class Loop extends THREE.Group {
     this.tapReactions = options.tapReactions ?? true;
     this.sleepAfter = options.sleepAfter ?? 180;
     const detail = options.detail ?? 1;
+    const flat = this.flatU;
+    const flatColor = this.flatColorU;
 
-    this.bodyMat = new THREE.MeshPhysicalMaterial({ clearcoat: 0.35, clearcoatRoughness: 0.4, sheen: 0.5, sheenRoughness: 0.5 });
+    const frosted = () => new THREE.MeshPhysicalMaterial({ clearcoat: 0.35, clearcoatRoughness: 0.4, sheen: 0.5, sheenRoughness: 0.5 });
+    this.bodyMat = makeSoft(frosted(), { rim: this.rimU, flat, flatColor });
     this.bodyMat.name = 'LoopBody';
-    this.bodyMat.onBeforeCompile = (shader) => addGlow(shader, this.rimU, null);
-
-    // The torso and wisps fade out towards their tips and sway in the vertex shader.
-    this.trailMat = new THREE.MeshPhysicalMaterial({
-      clearcoat: 0.35, clearcoatRoughness: 0.4, sheen: 0.5, sheenRoughness: 0.5,
-      vertexColors: true, transparent: true,
-    });
-    this.trailMat.name = 'LoopTrail';
-    this.trailMat.onBeforeCompile = (shader) => {
-      shader.uniforms.uLoopBend = this.bend;
-      shader.uniforms.uLoopWave = this.wave;
-      shader.vertexShader =
-        'uniform vec2 uLoopBend;\nuniform vec3 uLoopWave;\nvarying float vLoopTrail;\n' +
-        shader.vertexShader.replace(
-          '#include <begin_vertex>',
-          `#include <begin_vertex>
-          float loopK = clamp((uLoopWave.z - transformed.y) / uLoopWave.z, 0.0, 1.0);
-          float loopW = loopK * loopK;
-          vLoopTrail = loopK;
-          transformed.xz += uLoopBend * loopW;
-          transformed.x += sin(transformed.y * 4.2 + uLoopWave.y) * uLoopWave.x * loopW;
-          transformed.z += cos(transformed.y * 3.4 + uLoopWave.y * 0.8) * uLoopWave.x * 0.7 * loopW;`,
-        );
-      addGlow(shader, this.rimU, this.trailGlowU);
+    // The torso and wisps bend with their chains and fade out towards their tips.
+    const trailing = (chain: SoftChain, name: string) => {
+      const mat = makeSoft(frosted(), { chain, rim: this.rimU, trailGlow: this.trailGlowU, flat, flatColor });
+      mat.vertexColors = true;
+      mat.transparent = true;
+      mat.name = name;
+      return mat;
     };
+    this.torsoMat = trailing(this.ribbon, 'LoopTorso');
+    this.wispMat = trailing(this.wisp, 'LoopWisp');
 
-    this.faceMat = new THREE.MeshBasicMaterial({
-      map: this.face.texture, transparent: true, depthWrite: false, toneMapped: false,
-      polygonOffset: true, polygonOffsetFactor: -2,
-    });
-    this.faceMat.name = 'LoopFace';
-
-    const torso = new THREE.Mesh(createTorsoGeometry(detail), this.trailMat);
+    const torso = new THREE.Mesh(createTorsoGeometry(detail), this.torsoMat);
     torso.name = 'Torso';
-    const wisp = new THREE.Mesh(createWispGeometry(detail), this.trailMat);
-    wisp.name = 'Wisp';
-    torso.renderOrder = wisp.renderOrder = 1;
-    this.squash.add(torso, wisp, this.core.group);
+    const wispMesh = new THREE.Mesh(createWispGeometry(detail), this.wispMat);
+    wispMesh.name = 'Wisp';
+    torso.renderOrder = wispMesh.renderOrder = 1;
+    // Bent in the shader, so their true bounds are unknown to the culling test.
+    torso.frustumCulled = wispMesh.frustumCulled = false;
+    this.squash.add(torso, wispMesh, this.core.group);
 
     const skull = new THREE.Mesh(createHeadGeometry(detail), this.bodyMat);
     skull.name = 'Head';
-    const faceMesh = new THREE.Mesh(createFaceGeometry(), this.faceMat);
-    faceMesh.name = 'Face';
-    faceMesh.renderOrder = 3;
+    const faceMat = new THREE.MeshBasicMaterial({
+      map: this.face.texture, transparent: true, depthWrite: false, toneMapped: false,
+      polygonOffset: true, polygonOffsetFactor: -2,
+    });
+    faceMat.name = 'LoopFace';
+    this.faceMesh = new THREE.Mesh(createFaceGeometry(), faceMat);
+    this.faceMesh.name = 'Face';
+    this.faceMesh.renderOrder = 3;
     this.head.name = 'HeadRig';
-    this.head.add(skull, faceMesh);
+    this.head.add(skull, this.faceMesh);
     this.squash.add(this.head);
 
+    // Hands are not attached to anything: they live beside the body and chase it.
     const handGeo = createHandGeometry();
     for (const side of [-1, 1]) {
       const hand = new THREE.Mesh(handGeo, this.bodyMat);
       hand.name = side < 0 ? 'HandL' : 'HandR';
       hand.scale.x = -side; // thumbs point inward
       this.hands.push(hand);
-      this.squash.add(hand);
+      this.add(hand);
     }
 
     // A small mote that circles the chest at higher Soulform stages.
@@ -282,7 +334,7 @@ export class Loop extends THREE.Group {
     const s: Skin = typeof skin === 'string' ? SKINS[skin] : skin;
     if (!s) throw new Error(`Unknown Loop skin "${String(skin)}"`);
     this.skin = s;
-    for (const mat of [this.bodyMat, this.trailMat]) {
+    for (const mat of [this.bodyMat, this.torsoMat, this.wispMat]) {
       mat.color.set(s.color);
       mat.roughness = s.roughness;
       mat.sheenColor.set(s.rim);
@@ -292,6 +344,15 @@ export class Loop extends THREE.Group {
     this.applyGlow();
     return this;
   }
+
+  /** Clothing bends with the body and its free edges follow a beat late. */
+  private readonly soften: Soften = (material, sway) =>
+    makeSoft(material, {
+      chain: this.ribbon,
+      sway: { mode: sway, offset: sway === 'hem' ? this.hemU : this.drapeU },
+      flat: this.flatU,
+      flatColor: this.flatColorU,
+    });
 
   /**
    * Put something on. Slots: 'outfit' (none, ink, ocean, moss),
@@ -313,11 +374,12 @@ export class Loop extends THREE.Group {
       }
       const def = OUTFITS[this.outfit];
       if (def) {
-        this.outfitGroup = createOutfit(def.kind, def.color);
+        this.outfitGroup = createOutfit(def.kind, def.color, this.soften);
+        this.outfitGroup.traverse((o) => (o.frustumCulled = false));
         this.squash.add(this.outfitGroup);
       }
       // The chest light and chain rest on whatever is now the outer surface.
-      this.core.group.position.z = chestSurface(def?.kind ?? null, 0, DIM.coreY) + 0.012;
+      this.coreZ = chestSurface(def?.kind ?? null, 0, DIM.coreY) + 0.012;
       return this.equip('chain', this.chain);
     }
     if (slot === 'chain') {
@@ -330,7 +392,8 @@ export class Loop extends THREE.Group {
       }
       const def = CHAINS[this.chain];
       if (def) {
-        this.chainMesh = createChain(def.color, OUTFITS[this.outfit]?.kind ?? null);
+        this.chainMesh = createChain(def.color, OUTFITS[this.outfit]?.kind ?? null, this.soften);
+        this.chainMesh.frustumCulled = false;
         this.squash.add(this.chainMesh);
       }
       return this;
@@ -357,7 +420,7 @@ export class Loop extends THREE.Group {
   setLight(amount: number): this {
     this.light = Math.max(0, amount);
     const stage = soulformFor(this.light);
-    if (stage > this.stage) this.jelly.kick(1.6);
+    if (stage > this.stage && !this.gesture) void this.play('lift');
     this.stage = stage;
     this.applyGlow();
     return this;
@@ -372,12 +435,27 @@ export class Loop extends THREE.Group {
     const s = this.skin;
     const form = SOULFORMS[this.stage];
     const g = this.glowAmount;
-    this.bodyMat.emissiveIntensity = this.trailMat.emissiveIntensity = s.innerStrength * lerp(0.6, 1, Math.min(g, 1));
-    this.rimU.value.set(s.rim).multiplyScalar(0.34 * form.rim * lerp(0.4, 1, Math.min(g, 1)) * (g > 1 ? g : 1));
+    const inner = s.innerStrength * lerp(0.6, 1, Math.min(g, 1));
+    this.bodyMat.emissiveIntensity = this.torsoMat.emissiveIntensity = this.wispMat.emissiveIntensity = inner;
+    this.rimBase.set(s.rim).multiplyScalar(0.34 * form.rim * lerp(0.4, 1, Math.min(g, 1)) * (g > 1 ? g : 1));
+    this.rimU.value.copy(this.rimBase);
     this.trailGlowU.value.set(s.core).multiplyScalar(0.5 * form.trail * g);
     this.core.set(s.core, form.core * g);
-    this.core.group.visible = g > 0.02;
-    this.orbit.visible = form.orbit && g > 0.02;
+    this.core.group.visible = g > 0.02 && this.flatU.value < 0.5;
+    this.orbit.visible = form.orbit && g > 0.02 && this.flatU.value < 0.5;
+  }
+
+  /**
+   * Review aid: draw Loop as a flat silhouette with no face, light or glow,
+   * to judge the movement on its own. `color` is any CSS colour.
+   */
+  setSilhouette(on: boolean, color?: string): this {
+    this.flatU.value = on ? 1 : 0;
+    // Written straight to the screen, so keep the colour in display (sRGB) values.
+    if (color) this.flatColorU.value.set(color).convertLinearToSRGB();
+    this.faceMesh.visible = !on;
+    this.applyGlow();
+    return this;
   }
 
   setMotion(level: MotionLevel): this {
@@ -427,14 +505,15 @@ export class Loop extends THREE.Group {
   /**
    * Flash an expression, then return to the resting one. A new expression
    * replaces the previous one and its timer. 'concerned' and 'quiet' also
-   * cancel any celebration, running or waiting.
+   * cancel any celebration, running or waiting, and settle the body. 'joy'
+   * comes with a small lift of the body and a brighter inner light.
    */
   express(name: ExpressionName | (string & {}), duration: number | { seconds?: number } = 1.6): this {
     if (this.disposed) return this;
     this.requireExpression(name);
     const seconds = typeof duration === 'number' ? duration : (duration.seconds ?? 1.6);
     if (QUIETING.has(name)) this.quiet();
-    else if (this.tempExpression !== name) this.jelly.kick(1);
+    else if (name === 'joy' && !this.gesture && this._state !== 'sleeping') void this.play('lift');
     this.tempExpression = name;
     this.tempTimer = seconds;
     this.idleFor = 0;
@@ -466,10 +545,11 @@ export class Loop extends THREE.Group {
 
   /**
    * Play a gesture on top of the current state. Resolves when it finishes
-   * (or is replaced). 'celebration' is an alias for the dance.
+   * (or is replaced). 'celebration' is the milestone flourish; 'spin' is the
+   * three-quarter turn.
    */
-  play(name: GestureName | 'celebration' | (string & {})): Promise<void> {
-    if (name === 'celebration') name = 'dance';
+  play(name: GestureName | 'celebration' | 'spin' | (string & {})): Promise<void> {
+    name = GESTURE_ALIASES[name] ?? name;
     const def = this.gestureDefs.get(name);
     if (!def) throw new Error(`Unknown Loop gesture "${name}"`);
     if (this.disposed) return Promise.resolve();
@@ -482,10 +562,10 @@ export class Loop extends THREE.Group {
   }
 
   /**
-   * Celebrate a verified milestone: Loop dances (and a `LoopStage` adds
-   * confetti). If Loop is listening, thinking or speaking, the celebration
-   * waits until it is idle again. This is a visual reaction only; it grants
-   * nothing.
+   * Celebrate a verified milestone: one buoyant flourish (and a `LoopStage`
+   * adds confetti). If Loop is listening, thinking or speaking, the
+   * celebration waits until it is idle again. This is a visual reaction
+   * only; it grants nothing.
    */
   celebrate(): Promise<void> {
     if (this.disposed) return Promise.resolve();
@@ -500,9 +580,8 @@ export class Loop extends THREE.Group {
     const waiting = this.pendingCelebration ?? [];
     this.pendingCelebration = null;
     this.tempExpression = null;
-    this.jelly.kick(2.2);
     this.emit('celebrate', undefined);
-    void this.play('dance').then(() => waiting.forEach((resolve) => resolve()));
+    void this.play('flourish').then(() => waiting.forEach((resolve) => resolve()));
   }
 
   /**
@@ -514,14 +593,20 @@ export class Loop extends THREE.Group {
     return this;
   }
 
-  /** Float to a point in parent space. `y` is the ground point, not the head. */
-  moveTo(x: number, y = this.goal.y, z = this.goal.z): this {
+  /**
+   * Float to a point in parent space. `y` is the ground point, not the head.
+   * Loop looks where it is going first, then its centre sets off and the rest
+   * of the body follows.
+   */
+  moveTo(x: number, y = this.goal.y, z = this.goal.z, pace: Pace = 'normal'): this {
+    if (!this.held && !this.travelling && this.tmp.set(x, y, z).distanceTo(this.position) > 0.2) this.depart = 0.09;
     this.goal.set(x, y, z);
+    this.pace = pace;
     this.travelling = true;
     return this;
   }
 
-  /** Jump to a point instantly, with no travel. */
+  /** Jump to a point instantly, with no travel and no trailing. */
   teleport(x: number, y = 0, z = 0): this {
     this.goal.set(x, y, z);
     this.eased.copy(this.goal);
@@ -529,6 +614,15 @@ export class Loop extends THREE.Group {
     this.py.snap(y);
     this.pz.snap(z);
     this.position.copy(this.goal);
+    this.velocity.set(0, 0, 0);
+    this.travelling = false;
+    this.settle();
+    return this;
+  }
+
+  /** Drop all follow-through: every trailing part snaps to its place. */
+  settle(): this {
+    this.simFresh = true;
     return this;
   }
 
@@ -539,10 +633,11 @@ export class Loop extends THREE.Group {
     return this;
   }
 
-  /** A tap: wakes Loop if needed, a soft squish, then `onTap`. */
+  /** A tap: wakes Loop if needed, a soft ripple through the body, then `onTap`. */
   poke(strength = 1): this {
     if (this.disposed) return this;
-    this.jelly.kick(-2.4 * strength);
+    this.jelly.kick(-0.5 * strength);
+    this.ripple(0.9 * strength);
     this.tapCount = this.tapTimer > 0 ? this.tapCount + 1 : 1;
     this.tapTimer = 0.9;
     this.idleFor = 0;
@@ -554,7 +649,8 @@ export class Loop extends THREE.Group {
         this.tapCount = 0;
         void this.play('wiggle');
       } else {
-        this.express('happy', 1.1);
+        this.tempExpression = 'happy';
+        this.tempTimer = 1.1;
       }
     }
     this.emit('tap', { count: this.tapCount });
@@ -562,21 +658,54 @@ export class Loop extends THREE.Group {
     return this;
   }
 
-  /** Begin dragging: Loop follows `moveTo` targets tightly. */
+  /** Send a small wave out through the wisps and hands. */
+  private ripple(strength: number): void {
+    const scale = this.scale.x * strength;
+    this.ribbon.kick(this.tmp.set(-0.5 * scale, 0.5 * scale, 0));
+    this.wisp.kick(this.tmp.set(0.6 * scale, 0.45 * scale, 0));
+    this.handSprings.forEach((s, i) => {
+      s[0].kick((i ? 0.5 : -0.5) * scale);
+      s[1].kick(0.5 * scale);
+    });
+  }
+
+  /**
+   * Begin dragging. From here `moveTo` is followed almost directly, so the
+   * held point stays with the finger; the fluidity comes from everything else
+   * trailing behind it.
+   */
   grab(): this {
     this.held = true;
+    this.depart = 0;
     this.idleFor = 0;
-    this.jelly.kick(2);
-    this.express('surprised', 0.6);
+    this.goal.copy(this.position);
+    this.jelly.kick(0.35);
+    this.tempExpression = 'surprised';
+    this.tempTimer = 0.5;
     this.emit('grab', undefined);
     return this;
   }
 
+  /**
+   * Let go. Loop keeps a little of its momentum, glides a short way and
+   * settles into a hover there. It does not return anywhere by itself.
+   */
   release(): this {
     if (!this.held) return this;
     this.held = false;
-    this.jelly.kick(-1.6);
-    this.express('happy', 1);
+    const v = this.tmp.copy(this.velocity).clampLength(0, 7);
+    this.goal.copy(this.position).addScaledVector(v, 0.13);
+    this.eased.copy(this.goal);
+    this.pace = 'normal';
+    this.px.snap(this.position.x);
+    this.py.snap(this.position.y);
+    this.pz.snap(this.position.z);
+    this.px.velocity = v.x * 0.75;
+    this.py.velocity = v.y * 0.75;
+    this.pz.velocity = v.z * 0.75;
+    this.travelling = true;
+    this.tempExpression = 'happy';
+    this.tempTimer = 1;
     this.emit('release', undefined);
     return this;
   }
@@ -618,36 +747,61 @@ export class Loop extends THREE.Group {
     this.time += dt;
     const t = this.time;
     const m = this.m;
+    const k = Math.max(m, 0.25);
     const st = this._state;
-    const asleep = st === 'sleeping';
-    // Concern and quiet hold the body still: no bouncing while they show.
-    const hushed = this.tempExpression !== null && QUIETING.has(this.tempExpression);
-    const live = m * (hushed ? 0.35 : 1);
+    const pose = this.pose;
 
-    // ── Travel: ease the target, then follow it on a soft spring.
-    this.eased.lerp(this.goal, damp(this.held ? 20 : 5.5, dt));
-    const freq = this.held ? 13 : 8;
-    for (const [s, v] of [[this.px, this.eased.x], [this.py, this.eased.y], [this.pz, this.eased.z]] as const) {
-      s.freq = freq;
-      s.target = v;
-      s.update(dt);
+    // ── Blend posture between states and moods rather than switching.
+    const hushed = this.tempExpression !== null && QUIETING.has(this.tempExpression);
+    const blend = damp(9, dt);
+    this.wListen = lerp(this.wListen, st === 'listening' ? 1 : 0, blend);
+    this.wThink = lerp(this.wThink, st === 'thinking' ? 1 : 0, blend);
+    this.wSpeak = lerp(this.wSpeak, st === 'speaking' ? 1 : 0, blend);
+    this.wSleep = lerp(this.wSleep, st === 'sleeping' ? 1 : 0, damp(5, dt));
+    this.wHush = lerp(this.wHush, hushed ? 1 : 0, blend);
+    // The head tilt of thinking arrives after the gaze has already lifted.
+    this.wThinkTilt = lerp(this.wThinkTilt, this.wThink, damp(4, dt));
+    const { wListen, wThink, wSpeak, wSleep, wHush } = this;
+
+    // Calm states slow the whole rhythm; they never stop it.
+    this.life += dt * lerp(1, 0.62, wHush) * lerp(1, 0.55, wSleep) * lerp(1, 0.75, wThink);
+    const ph = this.life;
+    const amp = m * lerp(1, 0.4, wListen) * lerp(1, 0.6, wHush);
+
+    // ── Travel. Held: the grabbed point stays with the finger. Free: look
+    // first, then ease away and settle with next to no overshoot.
+    const vel = this.velocity;
+    if (this.held) {
+      const before = this.tmp.copy(this.position);
+      this.position.lerp(this.goal, damp(42, dt));
+      if (dt > 0) vel.lerp(this.tmp2.subVectors(this.position, before).divideScalar(dt), damp(26, dt));
+      this.eased.copy(this.position);
+    } else {
+      if (this.depart > 0) this.depart -= dt;
+      else this.eased.lerp(this.goal, damp(this.pace === 'gentle' ? 1.9 : 5.2, dt));
+      const gentle = this.pace === 'gentle';
+      for (const [s, v] of [[this.px, this.eased.x], [this.py, this.eased.y], [this.pz, this.eased.z]] as const) {
+        s.freq = gentle ? 5.5 : 7.2;
+        s.damping = gentle ? 1 : 0.88;
+        s.target = v;
+        s.update(dt);
+      }
+      this.position.set(this.px.value, this.py.value, this.pz.value);
+      vel.set(this.px.velocity, this.py.velocity, this.pz.velocity);
     }
-    this.position.set(this.px.value, this.py.value, this.pz.value);
-    const vx = this.px.velocity;
-    const vy = this.py.velocity;
-    const vz = this.pz.velocity;
-    const speed = Math.hypot(vx, vy, vz);
-    if (this.travelling && !this.held && speed < 0.06 && this.position.distanceTo(this.goal) < 0.04) {
+    const speed = vel.length();
+    const toGoal = this.tmp.subVectors(this.goal, this.position);
+    const distance = toGoal.length();
+    if (this.travelling && !this.held && speed < 0.06 && distance < 0.04) {
       this.travelling = false;
       this.emit('arrive', undefined);
     }
 
     // ── Gesture layer.
-    const pose = this.pose;
     Object.assign(pose, zeroPose());
     if (this.gesture) {
       const g = this.gesture;
-      g.t += dt * 1.15;
+      g.t += dt;
       const p = g.t / g.def.duration;
       if (p >= 1) {
         this.gesture = null;
@@ -658,133 +812,224 @@ export class Loop extends THREE.Group {
       }
     }
 
-    // ── Lean into travel; the trail and the head follow a beat behind.
-    const k = Math.max(m, 0.25);
-    this.roll.target = clamp(-vx * 0.06, -0.4, 0.4) * k;
-    this.lean.target = clamp(vz * 0.05 + vy * 0.01, -0.3, 0.3) * k;
-    this.bendX.target = clamp(-vx * 0.085, -0.42, 0.42) * k;
-    this.bendZ.target = clamp(-vz * 0.085, -0.36, 0.36) * k;
-    if (dt > 0) {
-      const ax = (vx - this.prevV.x) / dt;
-      const ay = (vy - this.prevV.y) / dt;
-      this.headX.target = clamp(-ax * 0.004, -0.1, 0.1) * k;
-      this.headY.target = clamp(-ay * 0.004 - vy * 0.012, -0.1, 0.1) * k;
-      this.jelly.target = clamp(-ay * 0.003, -0.1, 0.1) * k;
-      this.prevV.set(vx, vy, vz);
-    }
-    for (const s of [this.roll, this.lean, this.bendX, this.bendZ, this.headX, this.headY, this.jelly]) s.update(dt);
-    this.approach.target = st === 'listening' ? 0.3 : 0;
-    this.approach.update(dt);
-
-    // ── Attention: the body turns a little, the head more, the eyes the rest.
+    // ── Attention. The eyes go first, the head follows, the body turns least.
     let lookYaw = 0;
     let lookPitch = 0;
     if (st === 'thinking') {
       lookYaw = 0.4;
-      lookPitch = -0.28;
-    } else if (!asleep && this.hasLookTarget) {
-      const origin = this.tmp.set(0, this.hoverHeight + DIM.headY, 0);
-      const local = this.worldToLocal(this.lookTarget.clone()).sub(origin);
+      lookPitch = -0.3;
+    } else if (st !== 'sleeping' && this.hasLookTarget) {
+      const origin = this.tmp2.set(0, this.hoverHeight + DIM.headY, 0);
+      const local = this.worldToLocal(this.tmpTarget.copy(this.lookTarget)).sub(origin);
       lookYaw = clamp(Math.atan2(local.x, Math.max(local.z, 0.4)), -1.1, 1.1);
       lookPitch = clamp(-Math.atan2(local.y, Math.hypot(local.x, Math.max(local.z, 0.4))), -0.7, 0.7);
-    } else if (!asleep) {
+    } else if (st !== 'sleeping') {
       lookYaw = this.glanceX;
       lookPitch = this.glanceY;
     }
-    this.yaw.target = lookYaw * 0.22;
-    this.pitch.target = lookPitch * 0.12;
-    this.headYaw.target = lookYaw * 0.34;
-    this.headPitch.target = lookPitch * 0.34;
-    for (const s of [this.yaw, this.pitch, this.headYaw, this.headPitch]) s.update(dt);
+    // Where Loop is headed (or being carried) takes over its gaze.
+    const intent = this.held ? clamp(speed / 3, 0, 1) * 0.85 : this.travelling ? clamp(distance / 0.5, 0, 1) : 0;
+    if (intent > 0.01) {
+      const dir = this.held ? vel : toGoal;
+      const len = dir.length() + 0.35;
+      lookYaw = lerp(lookYaw, clamp((dir.x / len) * 0.95, -0.85, 0.85), intent);
+      lookPitch = lerp(lookPitch, clamp((-dir.y / len) * 0.6, -0.5, 0.5), intent);
+    }
+    lookYaw *= 1 - pose.attend;
+    lookPitch *= 1 - pose.attend;
+    this.yaw.target = lookYaw * 0.2;
+    this.pitch.target = lookPitch * 0.1;
+    this.headYaw.target = lookYaw * 0.36;
+    this.headPitch.target = lookPitch * 0.36;
     const face = this.face;
-    const eyeK = damp(14, dt);
+    const eyeK = damp(16, dt);
     face.lookX = lerp(face.lookX, clamp((lookYaw * 0.44) / 0.3, -1, 1), eyeK);
     face.lookY = lerp(face.lookY, clamp((-lookPitch * 0.54) / 0.3, -1, 1), eyeK);
 
-    // ── Hover: slow layered bob and sway.
-    const slow = asleep ? 0.55 : 1;
-    const bob = (Math.sin(t * 2.1 * slow) * 0.06 + Math.sin(t * 1.1 * slow + 1.3) * 0.025) * live * (asleep ? 1.3 : 1);
-    const sway = Math.sin(t * 0.62 + 0.4) * 0.035 * live;
-    const idleRoll = Math.sin(t * 0.81) * 0.02 * live + (st === 'listening' ? 0.05 : 0);
-    const hover = this.hoverHeight * lerp(0.5, 1, m) * (asleep ? 0.4 : 1);
-    const breath = Math.sin(t * (asleep ? 1.2 : 2.1) + 0.6) * 0.012 * Math.max(m, 0.4);
+    // ── The centre leans a little into travel.
+    this.roll.target = clamp(-vel.x * 0.045, -0.3, 0.3) * k;
+    this.lean.target = clamp(vel.z * 0.04 + vel.y * 0.008, -0.2, 0.2) * k;
+    this.headRoll.target = clamp(-vel.x * 0.02, -0.12, 0.12) * k;
+    for (const s of [this.roll, this.lean, this.yaw, this.pitch, this.headYaw, this.headPitch, this.headRoll, this.jelly]) {
+      s.update(dt);
+    }
+
+    // ── Idle: a slow, wandering float. Rise, ease across, sink, return;
+    // the rhythms never line up, so the path never quite repeats.
+    const bob = (0.034 * Math.sin((ph * TAU) / 5.2) + 0.012 * Math.sin((ph * TAU) / 3.3 + 1.1)) * amp;
+    const driftX = (0.022 * Math.sin((ph * TAU) / 6.6 + 0.8) + 0.008 * Math.sin((ph * TAU) / 4.1 + 2)) * amp * (1 + 0.6 * wThink);
+    const driftZ = 0.012 * Math.sin((ph * TAU) / 7.3 + 0.3) * amp;
+    const idleRoll = 0.023 * Math.sin((ph * TAU) / 5.8 + 0.4) * amp;
+    const idlePitch = 0.012 * Math.sin((ph * TAU) / 7.1 + 1.9) * amp;
+    const hover = this.hoverHeight * lerp(0.5, 1, m) * lerp(1, 0.55, wSleep);
+    const breath = Math.sin((ph * TAU) / 3.6 + 0.6) * 0.006 * Math.max(m, 0.4);
 
     const model = this.model;
-    model.position.set(sway + pose.slide, DIM.pivotY + hover + bob + pose.lift, this.approach.value * k);
+    model.position.set(
+      driftX + pose.slide,
+      DIM.pivotY + hover + bob + pose.lift - 0.035 * wHush,
+      driftZ + 0.3 * wListen * k,
+    );
     model.rotation.set(
-      this.pitch.value + this.lean.value + pose.pitch + (st === 'listening' ? 0.08 : 0),
-      this.yaw.value + pose.yaw + Math.sin(t * 0.37) * 0.04 * live,
+      this.pitch.value + this.lean.value + pose.pitch + idlePitch + 0.07 * wListen + 0.05 * wHush,
+      this.yaw.value + pose.yaw,
       this.roll.value + idleRoll + pose.roll,
       'YXZ',
     );
 
-    // ── Soft squash and stretch, volume-preserving.
-    const sy = clamp(
-      1 + breath + this.jelly.value + pose.stretch + clamp(Math.abs(vy) * 0.035 + Math.abs(vx) * 0.008, 0, 0.14) * k,
-      0.75, 1.3,
-    );
-    const sxz = 1 / Math.sqrt(sy);
-    this.squash.scale.set(sxz, sy, sxz);
+    // ── A subtle stretch with speed (a few percent), and a soft press when touched.
+    const ex = clamp(Math.abs(vel.x) * 0.006, 0, 0.03) * k;
+    const ey = clamp(Math.abs(vel.y) * 0.008, 0, 0.04) * k + breath + this.jelly.value + pose.stretch;
+    const sy = clamp(1 + ey, 0.9, 1.12);
+    const sx = (1 + ex) / Math.sqrt(sy);
+    this.squash.scale.set(sx, sy, 1 / Math.sqrt(sy * (1 + ex)));
 
-    // ── Head: floats above the neck, lags the body, nods off when asleep.
-    this.head.position.set(
-      this.headX.value + Math.sin(t * 1.3 + 1) * 0.012 * live,
-      DIM.headY + this.headY.value + Math.sin(t * 2.1 * slow + 0.9) * 0.022 * live + pose.lift * 0.12,
-      Math.cos(t * 1.1) * 0.008 * live,
-    );
+    // ── Head: carried by the centre, with a small life of its own. It moves
+    // least of all, so the face always reads.
+    const headAmp = amp * (1 - 0.5 * wSpeak);
+    this.head.position.set(0, DIM.headY + 0.012 * Math.sin((ph * TAU) / 3.9 + 0.9) * headAmp - 0.04 * wSleep - 0.012 * wHush, 0);
     this.head.rotation.set(
-      this.headPitch.value + pose.pitch * 0.7 + (asleep ? 0.22 : 0) + (hushed ? 0.06 : 0),
+      this.headPitch.value + pose.pitch * 0.5 + 0.2 * wSleep + 0.09 * wHush + 0.018 * Math.sin((ph * TAU) / 6.1 + 1.7) * headAmp,
       this.headYaw.value,
-      -this.headX.value * 1.6 + pose.roll * 0.5 + (asleep ? 0.12 : 0) + (st === 'listening' ? 0.06 : 0),
+      this.headRoll.value + 0.03 * Math.sin((ph * TAU) / 4.6 + 2.2) * headAmp + 0.1 * this.wThinkTilt +
+        0.05 * wListen + 0.1 * wSleep + pose.roll * 0.35,
       'YXZ',
     );
 
-    // ── Trail: sweeps behind travel and never quite stops moving.
-    this.bend.value.set(this.bendX.value, this.bendZ.value);
-    this.wave.value.x = (0.028 + Math.min(speed, 5) * 0.012) * Math.max(m, 0.12);
-    this.wave.value.y = t * 2.6 * (asleep ? 0.6 : 1);
-
-    // ── Hands: detached, swinging about the shoulders, a beat late.
-    this.hands.forEach((hand, i) => {
-      const side = i === 0 ? -1 : 1;
-      const hx = this.handX[i];
-      const hy = this.handY[i];
-      hx.target = clamp(-vx * 0.06, -0.22, 0.22) * k;
-      hy.target = clamp(-vy * 0.06, -0.18, 0.22) * k;
-      hx.update(dt);
-      hy.update(dt);
-      const raise =
-        ARM.rest + (i === 0 ? pose.armL : pose.armR) +
-        Math.sin(t * 2.1 + 0.8 + i * 1.7) * 0.06 * live +
-        Math.max(0, -this.jelly.value) * 1.6 +
-        (asleep ? -0.12 : 0);
-      const reach = ARM.length * (1 + Math.min(0.25, raise * 0.06));
-      hand.position.set(
-        side * (ARM.x + Math.sin(raise) * reach) + hx.value,
-        ARM.y - Math.cos(raise) * reach + hy.value + Math.sin(t * 2.1 + i * 2.4) * 0.02 * live,
-        ARM.z + Math.sin(raise) * 0.05,
-      );
-      hand.rotation.set(0.15, 0, side * (raise * 0.85 - 0.25) + hx.value * 1.2);
-    });
-
-    // ── Chest light: a slow pulse, quicker while thinking.
-    const pulse = 1 + Math.sin(t * (st === 'thinking' ? 5 : 1.7)) * (st === 'thinking' ? 0.14 : 0.07) * Math.max(m, 0.3);
-    this.core.group.scale.setScalar(pulse);
-    if (this.orbit.visible) {
-      const a = t * 1.3;
-      this.orbit.position.set(Math.sin(a) * 0.62, DIM.coreY + Math.sin(a * 0.7) * 0.22, Math.cos(a) * 0.5);
-      (this.orbit.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.sin(t * 3) * 0.25;
-    }
+    this.follow(dt, t, ph, speed);
 
     // ── Ground shadow: soft, and softer with height.
     const alt = this.ground === null ? 0 : Math.max(0, this.position.y - this.ground);
     const h = alt + hover + bob + pose.lift;
     this.shadow.position.set(model.position.x * 0.6, -alt + 0.004, 0.02);
     const spread = 1 + h * 0.35;
-    this.shadow.scale.set(spread * sxz, spread * sxz, 1);
+    this.shadow.scale.set(spread, spread, 1);
     (this.shadow.material as THREE.MeshBasicMaterial).opacity = 0.26 / (1 + h * 1.6);
 
     this.updateFace(dt, speed);
+  }
+
+  private readonly tmpTarget = new THREE.Vector3();
+
+  /**
+   * Everything that is not steered: lower torso, wisps, hands, hem, chain and
+   * inner light each chase the centre with their own inertia.
+   */
+  private follow(dt: number, t: number, ph: number, speed: number): void {
+    const { pose, model, m, wHush, wSleep, wSpeak, wThink } = this;
+    const k = Math.max(m, 0.25);
+
+    this.updateMatrix();
+    model.updateMatrix();
+    this.squash.updateMatrix();
+    this.toSim.multiplyMatrices(this.matrix, model.matrix).multiply(this.squash.matrix);
+    this.toBody.copy(this.toSim).invert();
+    this.fromSim.copy(this.matrix).invert();
+
+    // How the centre is moving, as the body itself feels it.
+    const lead = this.tmp.set(0, DIM.pivotY, 0).applyMatrix4(this.toSim);
+    if (this.simFresh) this.leadPos.copy(lead);
+    if (dt > 0) this.leadVel.lerp(this.tmp2.subVectors(lead, this.leadPos).divideScalar(dt), damp(30, dt));
+    this.leadPos.copy(lead);
+    const felt = this.tmp2.copy(this.leadVel).applyQuaternion(this.tmpQ.copy(model.quaternion).invert()).divideScalar(this.scale.x || 1);
+    const yawNow = model.rotation.y;
+    const yawRate = dt > 0 && !this.simFresh ? clamp((yawNow - this.lastYaw) / dt, -8, 8) : 0;
+    this.lastYaw = yawNow;
+
+    // ── Lower torso and wisps. They keep curling and relaxing at rest; the
+    // curl is small when motion is reduced but never zero.
+    const curl = Math.max(m, 0.12) * lerp(1, 0.75, wHush) * (1 + Math.min(speed, 3) * 0.12);
+    const a = this.ribbonShape;
+    a.phaseA = ph * 1.75;
+    a.phaseB = ph * 1.07 + 0.5;
+    a.amount = curl;
+    a.spread = -pose.spread;
+    const b = this.wispShape;
+    b.phaseA = ph * 1.45 + 2;
+    b.phaseB = ph * 2.05 + 0.7;
+    b.amount = curl;
+    b.spread = pose.spread;
+    if (this.simFresh) {
+      this.ribbon.reset();
+      this.wisp.reset();
+    }
+    this.ribbon.step(dt, this.toSim, this.toBody, a);
+    // The short wisp is rooted in the lower torso, wherever that has swung to.
+    for (let i = 0; i < 2; i++) this.ribbon.deform(WISP_SPINE[i], this.wispPins[i]);
+    this.wisp.step(dt, this.toSim, this.toBody, b, this.wispPins);
+
+    // ── Hands: each floats to its own place beside the body, a beat late,
+    // and drifts on its own while it waits.
+    const drawnIn = clamp(pose.handsIn + 0.8 * wHush, 0, 1);
+    const handAmp = Math.max(m, 0.2) * lerp(1, 0.7, wHush);
+    this.hands.forEach((hand, i) => {
+      const side = i === 0 ? -1 : 1;
+      const raise =
+        ARM.rest + (i === 0 ? pose.armL : pose.armR) +
+        0.1 * wSpeak * (0.6 + 0.5 * Math.sin(t * 2.6 + i * 2.4)) -
+        0.14 * wSleep + 0.06 * wThink * i;
+      const reach = ARM.length * (1 + Math.min(0.25, raise * 0.06)) * (1 - 0.25 * drawnIn);
+      const want = this.tmp.set(
+        side * (ARM.x * (1 - 0.5 * drawnIn) + Math.sin(raise) * reach) + 0.02 * Math.sin((ph * TAU) / 3.7 + i * 2.1) * handAmp,
+        ARM.y - Math.cos(raise) * reach + 0.1 * drawnIn - 0.05 * wSleep + 0.028 * Math.sin((ph * TAU) / 4.3 + i * 1.3 + 0.5) * handAmp,
+        ARM.z + Math.sin(raise) * 0.05 + 0.14 * drawnIn + 0.012 * Math.sin((ph * TAU) / 5.1 + i) * handAmp,
+      ).applyMatrix4(this.toSim);
+      const s = this.handSprings[i];
+      s[0].target = want.x;
+      s[1].target = want.y;
+      s[2].target = want.z;
+      if (this.simFresh) s.forEach((sp) => sp.snap(sp.target));
+      else s.forEach((sp) => sp.update(dt));
+      // However fast Loop travels, a hand never trails further than arm's reach.
+      const behind = Math.hypot(s[0].value - want.x, s[1].value - want.y, s[2].value - want.z);
+      const reachMax = 0.3 * this.scale.x;
+      if (behind > reachMax) {
+        const pull = 1 - reachMax / behind;
+        s[0].value += (want.x - s[0].value) * pull;
+        s[1].value += (want.y - s[1].value) * pull;
+        s[2].value += (want.z - s[2].value) * pull;
+      }
+      const lagX = s[0].value - want.x;
+      const lagY = s[1].value - want.y;
+      hand.position.set(s[0].value, s[1].value, s[2].value).applyMatrix4(this.fromSim);
+      // Each hand tips with how far it is trailing, like something towed through water.
+      hand.quaternion
+        .setFromEuler(this.tmpE.set(0.15 - lagY * 1.2, 0, side * (raise * 0.85 - 0.25) + lagX * 1.6))
+        .premultiply(model.quaternion);
+    });
+
+    // ── Clothing and chain: anchored at the shoulders and collar; the hem and
+    // the hanging links swing after a movement and then settle.
+    const turn = -yawRate * 0.012;
+    this.hem[0].target = clamp(-felt.x * 0.016 + turn, -0.055, 0.055) * k;
+    this.hem[1].target = clamp(-felt.z * 0.016, -0.045, 0.045) * k;
+    this.drape[0].target = clamp(-felt.x * 0.02 + turn * 1.2, -0.05, 0.05) * k;
+    this.drape[1].target = clamp(-felt.z * 0.012, -0.012, 0.03) * k;
+    this.coreLag[0].target = clamp(-felt.x * 0.004, -0.018, 0.018) * k;
+    this.coreLag[1].target = clamp(-felt.y * 0.004, -0.018, 0.018) * k;
+    for (const s of [...this.hem, ...this.drape, ...this.coreLag]) {
+      if (this.simFresh) s.snap(0);
+      else s.update(dt);
+    }
+    this.hemU.value.set(this.hem[0].value, Math.abs(this.hem[0].value) * 0.15, this.hem[1].value);
+    this.drapeU.value.set(this.drape[0].value, Math.abs(this.drape[0].value) * 0.25, this.drape[1].value);
+
+    // ── Inner light: seated on the chest, breathing on its own slow rhythm,
+    // brightening with joy. The outline's glow rises with it.
+    const coreAt = this.ribbon.deform(this.tmp.set(0, DIM.coreY, this.coreZ), this.core.group.position);
+    coreAt.x += this.coreLag[0].value;
+    coreAt.y += this.coreLag[1].value;
+    const thinking = wThink * 0.14 * Math.sin(t * 5);
+    const glow = 1 + 0.07 * Math.sin((ph * TAU) / 3.4) * Math.max(m, 0.3) + thinking + pose.light * 0.9 - 0.18 * wHush - 0.25 * wSleep;
+    this.core.pulse(glow);
+    this.rimU.value.copy(this.rimBase).multiplyScalar(1 + pose.light * 0.7);
+    if (this.orbit.visible) {
+      const o = t * 1.3;
+      this.orbit.position.set(Math.sin(o) * 0.62, DIM.coreY + Math.sin(o * 0.7) * 0.22, Math.cos(o) * 0.5);
+      (this.orbit.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.sin(t * 3) * 0.25;
+    }
+
+    this.simFresh = false;
   }
 
   private updateFace(dt: number, speed: number): void {
@@ -816,15 +1061,16 @@ export class Loop extends THREE.Group {
       this.nextBlink = 2.2 + Math.random() * 3.6;
     }
 
-    // Speech: real loudness if the host supplies it, otherwise a natural babble.
+    // Speech: real loudness if the host supplies it, otherwise a natural,
+    // restrained babble.
     let talk = 0;
     if (this._state === 'speaking') {
       const tt = this.time;
       talk =
         this.talkLevel ??
-        clamp(0.42 + Math.sin(tt * 17) * 0.3 + Math.sin(tt * 9.3 + 1) * 0.25 + Math.sin(tt * 3.1) * 0.15, 0, 1);
+        clamp(0.34 + Math.sin(tt * 15) * 0.24 + Math.sin(tt * 8.3 + 1) * 0.2 + Math.sin(tt * 3.1) * 0.14, 0, 0.8);
     }
-    face.talk = lerp(face.talk, talk, damp(28, dt));
+    face.talk = lerp(face.talk, talk, damp(24, dt));
 
     // Idle life: glance around, fidget now and then, and eventually doze off.
     const resting = this._state === 'idle' && !this.gesture && !this.held && !this.tempExpression && speed < 0.3;
@@ -908,29 +1154,6 @@ function disposeTree(root: THREE.Object3D): void {
     }
     seen.add(mat);
   });
-}
-
-/**
- * Makes the body read as softly translucent: a glow along the silhouette,
- * and (for the trail) extra light gathering towards the tips.
- */
-function addGlow(
-  shader: THREE.WebGLProgramParametersWithUniforms,
-  rim: { value: THREE.Color },
-  trail: { value: THREE.Color } | null,
-): void {
-  shader.uniforms.uLoopRim = rim;
-  if (trail) shader.uniforms.uLoopTrailGlow = trail;
-  shader.fragmentShader =
-    'uniform vec3 uLoopRim;\n' +
-    (trail ? 'uniform vec3 uLoopTrailGlow;\nvarying float vLoopTrail;\n' : '') +
-    shader.fragmentShader.replace(
-      '#include <emissivemap_fragment>',
-      `#include <emissivemap_fragment>
-      float loopRim = 1.0 - clamp(abs(dot(normalize(normal), normalize(vViewPosition))), 0.0, 1.0);
-      totalEmissiveRadiance += uLoopRim * loopRim * loopRim * (0.35 + loopRim);
-      ${trail ? 'totalEmissiveRadiance += uLoopTrailGlow * vLoopTrail * vLoopTrail * (0.4 + loopRim);' : ''}`,
-    );
 }
 
 function createShadow(): THREE.Mesh {

@@ -13,8 +13,10 @@ export interface LoopStageOptions extends LoopOptions {
    * catches pointer input; everything else passes through to your UI.
    */
   overlay?: boolean;
-  /** Loop's on-screen height in CSS px. Default: fit ~58% of the stage height. */
+  /** Loop's on-screen height in CSS px. Default: sized from `fill`. */
   size?: number;
+  /** Without `size`: the share of the stage's height Loop takes up (default 0.66). */
+  fill?: number;
   /** Where Loop rests. Default 'bottom-center' ('bottom-right' in overlay). */
   anchor?: Anchor;
   /** Gap from the stage edges for the anchor, CSS px. */
@@ -23,7 +25,7 @@ export interface LoopStageOptions extends LoopOptions {
   followPointer?: boolean;
   /** Loop can be picked up and carried. */
   draggable?: boolean;
-  /** After a drag, float back to the anchor. */
+  /** A moment after a drag ends, drift gently back to the anchor. Off by default: Loop stays where it is put. */
   returnHome?: boolean;
   /** Tapping empty stage space sends Loop there (not available in overlay). */
   roam?: boolean;
@@ -52,6 +54,8 @@ export class LoopStage {
   readonly renderer: THREE.WebGLRenderer;
   readonly canvas: HTMLCanvasElement;
   readonly confetti = new Confetti();
+  /** Slow motion for reviewing movement (1 = real time). */
+  timeScale = 1;
 
   private readonly opts: Required<Omit<LoopStageOptions, keyof LoopOptions | 'size'>> & { size?: number };
   private readonly container: HTMLElement;
@@ -67,6 +71,7 @@ export class LoopStage {
   private viewH = 4;
   private readonly home = new THREE.Vector3();
   private pinned = false;
+  private homeTimer = 0;
   private hidden = false;
   private pointerId: number | null = null;
   private downAt = { x: 0, y: 0, t: 0 };
@@ -81,11 +86,12 @@ export class LoopStage {
     this.opts = {
       overlay,
       size: options.size,
+      fill: options.fill ?? 0.66,
       anchor: options.anchor ?? (overlay ? 'bottom-right' : 'bottom-center'),
       margin: options.margin ?? 24,
       followPointer: options.followPointer ?? true,
       draggable: options.draggable ?? true,
-      returnHome: options.returnHome ?? !overlay,
+      returnHome: options.returnHome ?? false,
       roam: options.roam ?? false,
       shadow: options.shadow ?? true,
       particles: options.particles ?? 1,
@@ -164,7 +170,7 @@ export class LoopStage {
     const tick = (now: number) => {
       if (!this.running) return;
       this.raf = requestAnimationFrame(tick);
-      this.frame((now - this.last) / 1000);
+      this.frame(((now - this.last) / 1000) * this.timeScale);
       this.last = now;
     };
     this.raf = requestAnimationFrame(tick);
@@ -265,7 +271,7 @@ export class LoopStage {
   /** Return to the resting anchor. */
   goHome(): void {
     this.pinned = false;
-    this.loop.moveTo(this.home.x, this.home.y, this.home.z);
+    this.loop.moveTo(this.home.x, this.home.y, this.home.z, 'gentle');
   }
 
   /** Change where Loop rests. */
@@ -283,6 +289,7 @@ export class LoopStage {
 
   dispose(): void {
     this.stop();
+    window.clearTimeout(this.homeTimer);
     this.confetti.clear();
     this.resizeObserver.disconnect();
     this.disposers.forEach((d) => d());
@@ -310,7 +317,7 @@ export class LoopStage {
     this.renderer.setSize(w, h, false);
 
     // World units visible top-to-bottom at Loop's depth.
-    const fitted = LOOP_HEIGHT / 0.66;
+    const fitted = LOOP_HEIGHT / this.opts.fill;
     this.viewH = this.opts.size ? (LOOP_HEIGHT * h) / this.opts.size : Math.max(fitted, (LOOP_HEIGHT * 0.9 * h) / w);
     const viewW = (this.viewH * w) / h;
     const unit = this.viewH / h; // world units per CSS px
@@ -375,7 +382,7 @@ export class LoopStage {
     const onMove = (e: PointerEvent) => {
       if (this.pointerId === e.pointerId) {
         const moved = Math.hypot(e.clientX - this.downAt.x, e.clientY - this.downAt.y);
-        if (!this.dragging && this.opts.draggable && moved > 6) {
+        if (!this.dragging && this.opts.draggable && moved > 3) {
           this.dragging = true;
           this.loop.grab();
           target.style.cursor = 'grabbing';
@@ -407,6 +414,7 @@ export class LoopStage {
         }
         return;
       }
+      window.clearTimeout(this.homeTimer);
       this.pointerId = e.pointerId;
       this.downAt = { x: e.clientX, y: e.clientY, t: performance.now() };
       this.grabOffset.copy(this.loop.position).sub(this.toWorld(e.clientX, e.clientY, 0, this.v));
@@ -420,9 +428,17 @@ export class LoopStage {
       target.style.cursor = this.hitPad ? 'grab' : '';
       if (this.dragging) {
         this.dragging = false;
+        // Loop keeps a little momentum and settles where it was let go.
         this.loop.release();
-        if (this.opts.returnHome) this.goHome();
-        else this.pinned = true;
+        const g = this.loop.goal;
+        const [x, y] = this.clampToView(g.x, g.y);
+        g.set(x, y, 0);
+        this.pinned = true;
+        // Returning to the dock, if wanted, is its own unhurried journey later.
+        window.clearTimeout(this.homeTimer);
+        if (this.opts.returnHome) {
+          this.homeTimer = window.setTimeout(() => !this.dragging && this.goHome(), 1400);
+        }
       } else if (performance.now() - this.downAt.t < 600) {
         this.loop.poke();
       }
@@ -434,6 +450,17 @@ export class LoopStage {
     listen(window, 'pointercancel', onUp);
     const onLeave = () => this.loop.gazeAt(null);
     listen(document.documentElement, 'pointerleave', onLeave);
+  }
+
+  /** The region Loop's ground point can occupy, in the stage's own units. */
+  bounds(): { halfWidth: number; top: number; bottom: number } {
+    const viewW = (this.viewH * this.width) / this.height;
+    const bottom = this.camera.position.y - this.viewH * 0.045 - this.viewH / 2;
+    return {
+      halfWidth: Math.max(0, viewW / 2 - LOOP_HEIGHT * 0.3),
+      top: Math.max(0, bottom + this.viewH - LOOP_HEIGHT - 0.25),
+      bottom: Math.min(0, bottom + 0.1),
+    };
   }
 
   private clampToView(x: number, y: number): [number, number] {

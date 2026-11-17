@@ -2,5 +2,6 @@ node_modules
 dist
 demo-dist
 embed-dist
+preview-dist
 *.log
 .DS_Store

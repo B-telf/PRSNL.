@@ -51,7 +51,7 @@ public struct LoopConfiguration {
     public var motion: LoopMotion?
     /// The user can pick Loop up and carry it.
     public var draggable = true
-    /// After being carried, Loop floats back to its anchor.
+    /// Off: Loop stays where it is let go. On: a moment later it drifts gently back to its anchor.
     public var returnsHome = false
     /// Seconds of idle before Loop falls asleep (0 = never).
     public var sleepAfter: Double = 180
@@ -103,14 +103,15 @@ public final class LoopController: NSObject, ObservableObject {
 
     // MARK: Reactions
 
-    /// A verified milestone: Loop dances and confetti fills the screen. If Loop
+    /// A verified milestone: one buoyant flourish, and confetti fills the screen. If Loop
     /// is listening, thinking or speaking, it waits until idle. Visual only.
     public func celebrate() {
         if configuration.haptics { UINotificationFeedbackGenerator().notificationOccurred(.success) }
         call("celebrate")
     }
 
-    /// "wave", "nod", "shake", "spin", "celebration", "stretch", "shuffle",
+    /// "wave", "nod", "shake", "lift" (small win), "celebration" (milestone
+    /// flourish), "spin" (three-quarter turn for a new outfit), "stretch",
     /// "wiggle", "tilt", "startle". Plays on top of the current state.
     public func play(_ gesture: String) { call("play", gesture) }
 

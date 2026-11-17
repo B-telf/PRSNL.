@@ -258,3 +258,35 @@ export function createHandGeometry(): THREE.BufferGeometry {
 
 /** Shoulder point a hand swings around, and how far out it floats. */
 export const ARM = { x: 0.5, y: DIM.shoulderY, z: 0.1, length: 0.47, rest: 0.36 };
+
+// ───────────────────────────── Soft-body layout ─────────────────────────────
+
+/** Centre of a ring stack at height `y` (linear between rings). */
+export function centreAt(rings: Ring[], y: number): { x: number; z: number } {
+  for (let i = 0; i < rings.length - 1; i++) {
+    const a = rings[i];
+    const b = rings[i + 1];
+    if (y <= a.y && y >= b.y) {
+      const t = a.y === b.y ? 0 : (a.y - y) / (a.y - b.y);
+      return { x: (a.x ?? 0) + ((b.x ?? 0) - (a.x ?? 0)) * t, z: (a.z ?? 0) + ((b.z ?? 0) - (a.z ?? 0)) * t };
+    }
+  }
+  const end = y > rings[0].y ? rings[0] : rings[rings.length - 1];
+  return { x: end.x ?? 0, z: end.z ?? 0 };
+}
+
+const along = (rings: Ring[], heights: number[]) =>
+  heights.map((y) => {
+    const c = centreAt(rings, y);
+    return new THREE.Vector3(c.x, y, c.z);
+  });
+
+/**
+ * Control points down the body. The first two (neck, chest) are the upper
+ * torso and move with Loop's intention; the third is the lower torso; the
+ * rest are the flexible sections of the long ribbon.
+ */
+export const TORSO_SPINE = along(TORSO, [1.62, 1.34, 1.02, 0.76, 0.52, 0.31, 0.14, 0.0]);
+
+/** The short wisp: two points rooted in the lower torso, then its flexible sections. */
+export const WISP_SPINE = along(WISP, [1.25, 1.04, 0.9, 0.76, 0.62, 0.49, 0.38, 0.3]);

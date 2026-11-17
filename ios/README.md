@@ -63,7 +63,7 @@ struct MyApp: App {
 ```
 
 Run the app. Loop appears in the bottom-right corner, floating above your UI.
-You can tap it and drag it; everything else on screen works as before.
+You can tap it and drag it; it stays where you leave it. Everything else on screen works as before.
 To start with an outfit, pass a `LoopConfiguration` (see "Settings at start-up").
 
 ### UIKit
@@ -98,13 +98,13 @@ happen in the app:
 | Reply appears / speech begins | `loop.setState(.speaking)` | Optionally `loop.setSpeechLevel(0...1)` from real audio. |
 | Reply or speech ends or is cancelled | `loop.setSpeechLevel(0); loop.setState(.idle)` | Also on cancel, so the face never stays speaking. |
 | Save succeeds | `loop.play("nod")` | After the save succeeds, not on the button press. |
-| Goal / milestone verified | `loop.celebrate()` | Dance and full-screen confetti. Visual only; it grants nothing. |
-| Small win | `loop.express("joy", seconds: 2)` | |
+| Goal / milestone verified | `loop.celebrate()` | One buoyant flourish and full-screen confetti. Visual only; it grants nothing. |
+| Small win | `loop.express("joy", seconds: 2)` | The inner light brightens, Loop lifts a little, the wisps open. |
 | Difficult disclosure | `loop.express("concerned", seconds: 3)` | Cancels celebration and confetti; holds the body still. |
 | Request / connection failure | `loop.play("shake")` | No progress is deducted. |
 | User taps Loop | `loop.onTap = { openAssistant() }` | A tap wakes Loop first, then calls this. |
 | Inactivity | automatic | Sleeps after 3 idle minutes (`config.sleepAfter`). Never during listening, thinking or speaking. |
-| Equip | `loop.setSkin("glacier"); loop.equip("outfit", "ocean"); loop.equip("chain", "silver"); loop.equip("eyes", "ice"); loop.play("spin")` | |
+| Equip | `loop.setSkin("glacier"); loop.equip("outfit", "ocean"); loop.equip("chain", "silver"); loop.equip("eyes", "ice"); loop.play("spin")` | A smooth turn through a three-quarter view and back. |
 | Growth | `loop.setLight(90)` | Shows the Soulform stage for the user's cumulative light. |
 | Camera / payment / video screen | `loop.remove()` | Hides and stops rendering. `loop.show()` to return. |
 | Tear down for good | `loop.destroy()` | Releases the window. |
@@ -142,8 +142,8 @@ ready, so you never need to wait.
 |---|---|
 | `loop.setState(.idle)` | Also `.listening`, `.thinking`, `.speaking`, `.sleeping` |
 | `loop.setSpeechLevel(0.6)` | Mouth follows audio loudness while speaking |
-| `loop.celebrate()` | Dance and confetti |
-| `loop.play("wave")` | `wave`, `nod`, `shake`, `spin`, `celebration`, `stretch`, `shuffle`, `wiggle`, `tilt`, `startle` |
+| `loop.celebrate()` | Flourish and confetti |
+| `loop.play("wave")` | `wave`, `nod`, `shake`, `lift`, `celebration`, `spin`, `stretch`, `wiggle`, `tilt`, `startle` |
 | `loop.express("joy", seconds: 2)` | `neutral`, `joy`, `concerned`, `focused`, `proud`, `quiet`, `happy`, `attentive`, `curious`, `surprised`, `laugh`, `sleepy`, `wink` |
 | `loop.quiet()` | Stop celebrating now |
 | `loop.setSkin("pearl")` | `pearl`, `smoke`, `glacier`, `ember` |
@@ -204,7 +204,7 @@ config.chain = "silver"
 config.eyes = "onyx"
 config.light = 0                // the user's cumulative light, from your server
 config.sleepAfter = 180         // seconds of idle before sleeping; 0 = never
-config.returnsHome = true       // float back to the corner after being carried
+config.returnsHome = false      // true: drift gently back to the corner a moment after being carried
 
 let loop = LoopController(configuration: config)
 ```

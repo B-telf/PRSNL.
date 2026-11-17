@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Loop Motion Pass</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@600&display=swap" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="head">
+        <p class="eyebrow">PRSNL / Loop</p>
+        <h1>Motion pass</h1>
+        <p class="lede">
+          Body movement and follow-through only. Confetti and extra effects are switched off for this pass.
+          The same sequence runs at playground size and at chat size.
+        </p>
+      </header>
+
+      <section class="controls" aria-label="Preview controls">
+        <button id="play" class="btn primary" type="button" aria-pressed="true">Pause</button>
+        <div id="beats" class="beats" role="group" aria-label="Jump to a moment"></div>
+        <label class="switch"><input id="silhouette" type="checkbox" /><span>Silhouette only</span></label>
+        <label class="switch"><input id="slow" type="checkbox" /><span>Half speed</span></label>
+      </section>
+
+      <p id="note" class="note" aria-live="polite"></p>
+
+      <section class="stages">
+        <figure class="stage-card large">
+          <div id="large" class="stage"></div>
+          <figcaption>Playground size</figcaption>
+        </figure>
+
+        <figure class="stage-card small">
+          <div class="chat">
+            <div class="bubbles" aria-hidden="true">
+              <p class="bubble them">Morning. How did the walk go?</p>
+              <p class="bubble me">Did the full loop round the park.</p>
+              <p class="bubble them">That is three days running.</p>
+              <p class="bubble me">Feels good to keep it going.</p>
+            </div>
+            <div id="small" class="stage"></div>
+          </div>
+          <figcaption>Chat size</figcaption>
+        </figure>
+      </section>
+
+      <p class="foot">You can also drag Loop yourself in either view. The sequence pauses while you do.</p>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

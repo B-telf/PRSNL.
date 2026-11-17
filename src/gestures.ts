@@ -1,7 +1,13 @@
 import type { ExpressionName } from './Face';
-import { clamp, easeInOut, envelope, lerp } from './spring';
+import { clamp, easeInOut, envelope } from './spring';
 
-/** Additive offsets a gesture layers on top of Loop's live motion. */
+/**
+ * Additive offsets a gesture layers on top of Loop's live motion.
+ *
+ * A gesture only steers Loop's centre (head and upper torso) and its hands.
+ * The lower torso, wisps, clothing and chain are never posed directly: they
+ * follow through on their own, which is what keeps every gesture fluid.
+ */
 export interface Pose {
   /** Extra height. */
   lift: number;
@@ -15,12 +21,22 @@ export interface Pose {
   roll: number;
   /** Vertical stretch added to 1 (negative squashes). */
   stretch: number;
-  /** Arm raise in radians. L = screen-left, R = screen-right. */
+  /** Hand raise in radians. L = screen-left, R = screen-right. */
   armL: number;
   armR: number;
+  /** 0…1: the wisps open outward. */
+  spread: number;
+  /** 0…1: the inner light and outline brighten. */
+  light: number;
+  /** 0…1: turn to face the user, whatever Loop was looking at. */
+  attend: number;
+  /** 0…1: hands drawn in close to the chest. */
+  handsIn: number;
 }
 
-export const zeroPose = (): Pose => ({ lift: 0, slide: 0, pitch: 0, yaw: 0, roll: 0, stretch: 0, armL: 0, armR: 0 });
+export const zeroPose = (): Pose => ({
+  lift: 0, slide: 0, pitch: 0, yaw: 0, roll: 0, stretch: 0, armL: 0, armR: 0, spread: 0, light: 0, attend: 0, handsIn: 0,
+});
 
 export interface Gesture {
   /** Seconds. */
@@ -35,139 +51,147 @@ const TAU = Math.PI * 2;
 
 /** Built-in gestures. Add your own with `Loop.defineGesture`. */
 export const GESTURES = {
-  /** Small Wave — brief greeting. */
+  /** Greeting: turn to the user, rise a little, a loose floating wave. */
   wave: {
-    duration: 1.7,
+    duration: 2.3,
     expression: 'happy',
     apply(p, pose, t) {
-      const e = envelope(p, 0.2, 0.25);
-      pose.armR = e * (2.25 + Math.sin(t * 15) * 0.32);
-      pose.roll = -e * 0.07;
-      pose.lift = e * 0.05;
+      const e = envelope(p, 0.22, 0.3);
+      pose.attend = envelope(p, 0.1, 0.3);
+      pose.lift = e * 0.12;
+      // The hand leads; the body answers each swing a moment later.
+      pose.armR = e * (2.05 + Math.sin(t * 8.5) * 0.36);
+      pose.roll = -e * (0.05 + Math.sin(t * 8.5 - 0.9) * 0.022);
+      pose.armL = e * 0.12;
     },
   },
-  /** Satisfied Nod — acknowledges a saved action. */
+  /** Acknowledges a saved action. */
   nod: {
-    duration: 0.95,
+    duration: 1.1,
     expression: 'happy',
     apply(p, pose) {
-      const e = envelope(p, 0.12, 0.3);
-      pose.pitch = e * Math.max(0, Math.sin(p * TAU * 2)) * 0.26;
-      pose.lift = -pose.pitch * 0.12;
+      const e = envelope(p, 0.14, 0.32);
+      const dip = Math.max(0, Math.sin(p * TAU * 1.5));
+      pose.pitch = e * dip * 0.2;
+      pose.lift = -e * dip * 0.035;
     },
   },
-  /** Gentle "no". */
+  /** A gentle "no": something did not go through. */
   shake: {
-    duration: 1,
+    duration: 1.3,
     expression: 'concerned',
     apply(p, pose) {
-      pose.yaw = envelope(p, 0.12, 0.3) * Math.sin(p * TAU * 2.5) * 0.36;
+      const e = envelope(p, 0.14, 0.35);
+      pose.yaw = e * Math.sin(p * TAU * 2) * 0.3;
+      pose.handsIn = e * 0.4;
     },
   },
-  /** Pocket Stretch — a tiny standing stretch. */
-  stretch: {
-    duration: 2.4,
-    expression: 'happy',
-    apply(p, pose) {
-      const e = envelope(p, 0.3, 0.3);
-      pose.armL = pose.armR = e * 2.5;
-      pose.stretch = e * 0.09;
-      pose.lift = e * 0.1;
-      pose.pitch = -e * 0.08;
-      pose.roll = e * Math.sin(p * TAU) * 0.05;
-    },
-  },
-  /** Celebration: two floaty hops with arms up. */
-  celebrate: {
-    duration: 1.6,
+  /** Small achievement: the inner light brightens, Loop lifts, the wisps open. */
+  lift: {
+    duration: 1.9,
     expression: 'joy',
     apply(p, pose) {
-      const e = envelope(p, 0.1, 0.2);
-      const hop = Math.abs(Math.sin(p * Math.PI * 2));
-      pose.lift = e * hop * 0.42;
-      pose.stretch = e * (hop - 0.45) * 0.14;
-      pose.armL = pose.armR = e * (1.9 + hop * 0.5);
-      pose.roll = e * Math.sin(p * TAU * 2) * 0.08;
+      const e = envelope(p, 0.24, 0.42);
+      pose.light = envelope(p, 0.16, 0.5);
+      pose.lift = e * 0.17;
+      pose.spread = e * 0.85;
+      pose.stretch = e * 0.02;
+      pose.armL = pose.armR = e * 0.55;
     },
   },
-  /** Party dance: side-to-side bounce, a spin in the middle, arms-up finish. */
-  dance: {
-    duration: 3.6,
+  /**
+   * Major milestone: one buoyant upward sweep on a curve, a single turn at
+   * the top, then a gentle settle. Brief by design.
+   */
+  flourish: {
+    duration: 2.5,
     expression: 'joy',
     apply(p, pose) {
-      const e = envelope(p, 0.06, 0.1);
-      const sway = Math.sin(p * TAU * 3.5);
-      const beat = Math.abs(Math.sin(p * TAU * 3.5));
-      const finish = clamp((p - 0.84) / 0.08, 0, 1);
-      pose.slide = e * sway * 0.24 * (1 - finish);
-      pose.roll = -e * sway * 0.17 * (1 - finish);
-      pose.lift = e * (beat * 0.2 + finish * 0.22);
-      pose.stretch = e * ((beat - 0.5) * 0.2 + finish * 0.08);
-      pose.pitch = -e * finish * 0.1;
-      pose.armL = e * lerp(1.5 + sway * 0.9, 2.5, finish);
-      pose.armR = e * lerp(1.5 - sway * 0.9, 2.5, finish);
-      // One full turn through the middle of the dance.
-      pose.yaw = easeInOut(clamp((p - 0.4) / 0.26, 0, 1)) * TAU;
+      const rise = envelope(p, 0.3, 0.42);
+      pose.lift = rise * 0.62;
+      // The path bows out to one side on the way up and returns over the top.
+      pose.slide = Math.sin(clamp(p / 0.8, 0, 1) * Math.PI) * 0.26 * (1 - p * 0.4);
+      pose.roll = -Math.cos(clamp(p / 0.8, 0, 1) * Math.PI) * 0.1 * envelope(p, 0.1, 0.3);
+      pose.yaw = easeInOut(clamp((p - 0.16) / 0.5, 0, 1)) * TAU;
+      pose.stretch = envelope(clamp(p / 0.4, 0, 1), 0.3, 0.5) * 0.03;
+      pose.armL = pose.armR = rise * 1.9;
+      pose.spread = envelope(clamp((p - 0.25) / 0.65, 0, 1), 0.3, 0.5) * 0.9;
+      pose.light = envelope(p, 0.2, 0.45);
     },
   },
-  /** Hover & Settle — lifts, turns once, lands. */
-  spin: {
-    duration: 1.8,
-    expression: 'happy',
-    apply(p, pose) {
-      const e = envelope(p, 0.25, 0.3);
-      pose.lift = e * 0.45;
-      pose.yaw = easeInOut(p) * TAU;
-      pose.armL = pose.armR = e * 0.9;
-      pose.stretch = e * 0.05;
-    },
-  },
-  /** Victory Shuffle — a short two-step. */
-  shuffle: {
-    duration: 1.5,
-    expression: 'joy',
+  /** New outfit: a smooth turn through a three-quarter view, then back. */
+  turn: {
+    duration: 2.6,
+    expression: 'proud',
     apply(p, pose) {
       const e = envelope(p, 0.12, 0.2);
-      const s = Math.sin(p * TAU * 2);
-      pose.slide = e * s * 0.16;
-      pose.roll = -e * s * 0.13;
-      pose.lift = e * Math.abs(Math.cos(p * TAU * 2)) * 0.08;
-      pose.armL = e * (0.7 + s * 0.5);
-      pose.armR = e * (0.7 - s * 0.5);
+      // Out to one side, hold so it reads, a glance to the other, home.
+      const a = easeInOut(clamp(p / 0.3, 0, 1));
+      const b = easeInOut(clamp((p - 0.48) / 0.26, 0, 1));
+      const c = easeInOut(clamp((p - 0.8) / 0.2, 0, 1));
+      pose.yaw = 0.82 * a - 1.3 * b + 0.48 * c;
+      pose.lift = e * 0.07;
+      pose.armL = pose.armR = e * 0.32;
+      pose.attend = e;
     },
   },
-  /** Giggle: a quick decaying wobble (used when poked repeatedly). */
+  /** A soft, decaying giggle (several quick taps). */
   wiggle: {
-    duration: 1.1,
+    duration: 1.3,
     expression: 'laugh',
     apply(p, pose) {
       const decay = (1 - p) * (1 - p);
-      pose.roll = Math.sin(p * TAU * 5) * 0.14 * decay;
-      pose.stretch = Math.sin(p * TAU * 10) * 0.04 * decay;
-      pose.armL = pose.armR = envelope(p, 0.1, 0.5) * 0.6;
+      pose.roll = Math.sin(p * TAU * 3.5) * 0.085 * decay;
+      pose.spread = envelope(p, 0.15, 0.5) * 0.5;
+      pose.lift = envelope(p, 0.15, 0.5) * 0.06;
+      pose.armL = pose.armR = envelope(p, 0.12, 0.5) * 0.45;
     },
   },
-  /** Curious Tilt — one eye lifts as Loop leans. */
+  /** One eye lifts as Loop leans, curious. */
   tilt: {
-    duration: 1.6,
+    duration: 2.2,
     expression: 'curious',
     apply(p, pose) {
-      const e = envelope(p, 0.25, 0.3);
-      pose.roll = e * 0.2;
-      pose.slide = -e * 0.04;
+      const e = envelope(p, 0.3, 0.35);
+      pose.roll = e * 0.13;
+      pose.slide = -e * 0.03;
     },
   },
-  /** Startled little jump. */
+  /** A slow, contented stretch. */
+  stretch: {
+    duration: 2.8,
+    expression: 'happy',
+    apply(p, pose) {
+      const e = envelope(p, 0.32, 0.36);
+      pose.armL = pose.armR = e * 2.2;
+      pose.stretch = e * 0.035;
+      pose.lift = e * 0.1;
+      pose.pitch = -e * 0.06;
+      pose.spread = e * 0.3;
+    },
+  },
+  /** Woken or surprised: a quick lift that eases straight back down. */
   startle: {
-    duration: 0.7,
+    duration: 0.9,
     expression: 'surprised',
     apply(p, pose) {
-      const e = envelope(p, 0.08, 0.6);
-      pose.lift = e * 0.28;
-      pose.stretch = e * 0.12;
-      pose.armL = pose.armR = e * 1.3;
+      const e = envelope(p, 0.1, 0.65);
+      pose.lift = e * 0.16;
+      pose.stretch = e * 0.03;
+      pose.armL = pose.armR = e * 0.9;
+      pose.spread = e * 0.6;
     },
   },
 } satisfies Record<string, Gesture>;
 
 export type GestureName = keyof typeof GESTURES;
+
+/** Earlier and alternative names that still work with `Loop.play`. */
+export const GESTURE_ALIASES: Record<string, GestureName> = {
+  celebration: 'flourish',
+  celebrate: 'flourish',
+  dance: 'flourish',
+  spin: 'turn',
+  glow: 'lift',
+};
+

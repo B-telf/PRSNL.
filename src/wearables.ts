@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { DIM, TORSO, frontZ, sectionAt, sweep, type Ring } from './geometry';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { TORSO, frontZ, sectionAt, sweep, type Ring } from './geometry';
 
 /** Shape of the tee's body; a vest uses the same block with narrower shoulders. */
 const TEE: Ring[] = [
@@ -29,19 +30,38 @@ export function chestSurface(kind: 'tee' | 'vest' | null, x: number, y: number):
   return frontZ(TORSO, x, y);
 }
 
-function ring(y: number, rx: number, rz: number, tube: number, mat: THREE.Material): THREE.Mesh {
-  const mesh = new THREE.Mesh(new THREE.TorusGeometry(1, tube / rx, 10, 48), mat);
-  mesh.rotation.x = Math.PI / 2;
-  mesh.scale.set(rx, rz, rx);
-  mesh.position.y = y;
+/** How a wearable's material is taught to move: 'hem' for fabric, 'drape' for the chain. */
+export type Soften = <T extends THREE.Material>(material: T, sway: 'hem' | 'drape') => T;
+
+/**
+ * Bakes a mesh's own placement into its geometry, so every wearable lives in
+ * body space and can bend with the body in the vertex shader.
+ */
+function baked(geo: THREE.BufferGeometry, place: (m: THREE.Object3D) => void, mat: THREE.Material, name: string): THREE.Mesh {
+  const dummy = new THREE.Object3D();
+  place(dummy);
+  dummy.updateMatrix();
+  geo.applyMatrix4(dummy.matrix);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = name;
   return mesh;
 }
 
-/** A cropped, boxy tee or a zip vest, fitted over the torso. */
-export function createOutfit(kind: 'tee' | 'vest', color: string): THREE.Group {
+const ring = (y: number, rx: number, rz: number, tube: number, mat: THREE.Material, name: string) =>
+  baked(new THREE.TorusGeometry(1, tube / rx, 10, 48), (o) => {
+    o.rotation.x = Math.PI / 2;
+    o.scale.set(rx, rz, rx);
+    o.position.y = y;
+  }, mat, name);
+
+/**
+ * A cropped, boxy tee or a zip vest, fitted over the torso. It stays anchored
+ * at the shoulders while its hem and sleeves follow movement a beat late.
+ */
+export function createOutfit(kind: 'tee' | 'vest', color: string, soften: Soften): THREE.Group {
   const group = new THREE.Group();
   group.name = kind === 'tee' ? 'Tee' : 'Vest';
-  const fabric = new THREE.MeshStandardMaterial({ color, roughness: 0.94, metalness: 0, side: THREE.DoubleSide });
+  const fabric = soften(new THREE.MeshStandardMaterial({ color, roughness: 0.94, metalness: 0, side: THREE.DoubleSide }), 'hem');
   fabric.name = 'LoopFabric';
   const rings = kind === 'tee' ? TEE : VEST;
 
@@ -52,25 +72,25 @@ export function createOutfit(kind: 'tee' | 'vest', color: string): THREE.Group {
   // Ribbed collar and a rolled hem give the fabric visible thickness.
   const top = rings[0];
   const hem = rings[rings.length - 1];
-  group.add(ring(top.y, top.rx, top.rz, kind === 'tee' ? 0.022 : 0.03, fabric));
-  group.add(ring(hem.y, hem.rx, hem.rz, 0.012, fabric));
+  group.add(ring(top.y, top.rx, top.rz, kind === 'tee' ? 0.022 : 0.03, fabric, 'Collar'));
+  group.add(ring(hem.y, hem.rx, hem.rz, 0.012, fabric, 'Hem'));
 
   if (kind === 'tee') {
     for (const side of [-1, 1]) {
-      const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.2, 0.3, 40, 1, true), fabric);
-      sleeve.name = side < 0 ? 'SleeveL' : 'SleeveR';
-      sleeve.position.set(side * 0.535, 1.37, 0);
-      sleeve.rotation.z = side * 0.68;
-      sleeve.scale.z = 1.12;
-      const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.012, 8, 40), fabric);
-      cuff.rotation.x = Math.PI / 2;
-      cuff.position.y = -0.15;
-      sleeve.add(cuff);
-      group.add(sleeve);
+      const place = (o: THREE.Object3D) => {
+        o.position.set(side * 0.535, 1.37, 0);
+        o.rotation.z = side * 0.68;
+        o.scale.z = 1.12;
+      };
+      group.add(baked(new THREE.CylinderGeometry(0.17, 0.2, 0.3, 40, 6, true), place, fabric, side < 0 ? 'SleeveL' : 'SleeveR'));
+      const cuff = new THREE.TorusGeometry(0.2, 0.012, 8, 40);
+      cuff.rotateX(Math.PI / 2);
+      cuff.translate(0, -0.15, 0);
+      group.add(baked(cuff, place, fabric, 'Cuff'));
     }
   } else {
     // Zip: a slim metal line down the front that follows the chest.
-    const metal = new THREE.MeshStandardMaterial({ color: '#c9ced6', roughness: 0.3, metalness: 1 });
+    const metal = soften(new THREE.MeshStandardMaterial({ color: '#c9ced6', roughness: 0.3, metalness: 1 }), 'hem');
     const pts: THREE.Vector3[] = [];
     for (let i = 0; i <= 16; i++) {
       const y = hem.y + (1.62 - hem.y) * (i / 16);
@@ -78,22 +98,23 @@ export function createOutfit(kind: 'tee' | 'vest', color: string): THREE.Group {
     }
     const zip = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 32, 0.011, 8), metal);
     zip.name = 'Zip';
-    const pull = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.06, 0.014), metal);
-    pull.position.set(0, 1.5, frontZ(VEST, 0, 1.5, SECTION) + 0.014);
+    const pull = baked(new THREE.BoxGeometry(0.03, 0.06, 0.014), (o) => {
+      o.position.set(0, 1.5, frontZ(VEST, 0, 1.5, SECTION) + 0.014);
+    }, metal, 'ZipPull');
     group.add(zip, pull);
   }
   return group;
 }
 
-/** A curb chain that sits on the collar and drapes onto the chest. */
-export function createChain(color: string, outfit: 'tee' | 'vest' | null): THREE.InstancedMesh {
+/**
+ * A curb chain that sits on the collar and drapes onto the chest. The links
+ * are one mesh; each carries a `loopSway` weight (0 behind the neck, 1 at the
+ * lowest point in front) so the hanging part can swing and settle.
+ */
+export function createChain(color: string, outfit: 'tee' | 'vest' | null, soften: Soften): THREE.Mesh {
   const COUNT = 58;
-  const link = new THREE.TorusGeometry(0.021, 0.0068, 8, 18);
-  link.scale(1.35, 1, 1);
-  const metal = new THREE.MeshStandardMaterial({ color, roughness: 0.24, metalness: 1 });
+  const metal = soften(new THREE.MeshStandardMaterial({ color, roughness: 0.24, metalness: 1 }), 'drape');
   metal.name = 'LoopChain';
-  const mesh = new THREE.InstancedMesh(link, metal, COUNT);
-  mesh.name = 'Chain';
 
   // The path: high around the back of the neck, dropping to the chest in front.
   // On the bare body it sits lower, resting on the slope of the shoulders.
@@ -108,6 +129,7 @@ export function createChain(color: string, outfit: 'tee' | 'vest' | null): THREE
     return out.set(x, y, THREE.MathUtils.lerp(behind, resting, blend));
   };
 
+  const links: THREE.BufferGeometry[] = [];
   const p = new THREE.Vector3();
   const next = new THREE.Vector3();
   const tangent = new THREE.Vector3();
@@ -124,18 +146,30 @@ export function createChain(color: string, outfit: 'tee' | 'vest' | null): THREE
     // Alternate links turn a quarter, like a real chain.
     roll.setFromAxisAngle(X, i % 2 ? Math.PI / 2.4 : -0.25);
     q.multiply(roll);
-    m.compose(p, q, new THREE.Vector3(1, 1, 1));
-    mesh.setMatrixAt(i, m);
+    const link = new THREE.TorusGeometry(0.021, 0.0068, 6, 14);
+    link.scale(1.35, 1, 1);
+    link.applyMatrix4(m.compose(p, q, new THREE.Vector3(1, 1, 1)));
+    const sway = ((1 + Math.cos(a)) / 2) ** 1.6;
+    link.setAttribute('loopSway', new THREE.BufferAttribute(new Float32Array(link.getAttribute('position').count).fill(sway), 1));
+    links.push(link);
   }
-  mesh.instanceMatrix.needsUpdate = true;
+  const mesh = new THREE.Mesh(mergeGeometries(links), metal);
+  links.forEach((l) => l.dispose());
+  mesh.name = 'Chain';
   return mesh;
 }
 
 /**
  * The open loop of light on the chest: PRSNL's signature, present in every skin.
- * Returns the ring, its soft halo, and a setter for colour and strength.
+ * `set` chooses its colour and resting strength; `pulse` is the live, per-frame
+ * brightness (breathing, joy), which also swells the surrounding halo.
  */
-export function createCore(): { group: THREE.Group; set(color: string, strength: number): void; dispose(): void } {
+export function createCore(): {
+  group: THREE.Group;
+  set(color: string, strength: number): void;
+  pulse(level: number): void;
+  dispose(): void;
+} {
   const group = new THREE.Group();
   group.name = 'Core';
   const ringMat = new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false });
@@ -163,17 +197,27 @@ export function createCore(): { group: THREE.Group; set(color: string, strength:
   halo.name = 'CoreHalo';
   halo.position.z = 0.004;
   group.add(halo, loop);
-  group.position.y = DIM.coreY;
 
-  return {
+  const base = new THREE.Color();
+  const white = new THREE.Color('#ffffff');
+  let rest = 1;
+  const api = {
     group,
-    set(color, strength) {
-      ringMat.color.set(color).lerp(new THREE.Color('#ffffff'), 0.45).multiplyScalar(Math.min(1.6, 0.6 + strength * 0.6));
-      haloMat.color.set(color);
-      haloMat.opacity = Math.min(1, 0.42 * strength);
+    set(color: string, strength: number) {
+      base.set(color);
+      haloMat.color.copy(base);
+      rest = strength;
+      api.pulse(1);
+    },
+    pulse(level: number) {
+      const s = rest * level;
+      ringMat.color.copy(base).lerp(white, 0.45).multiplyScalar(Math.min(1.9, 0.6 + s * 0.6));
+      haloMat.opacity = Math.min(1, 0.42 * s);
+      halo.scale.setScalar(0.8 + 0.2 * level);
     },
     dispose() {
       haloTex.dispose();
     },
   };
+  return api;
 }
